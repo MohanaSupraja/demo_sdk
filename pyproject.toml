@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sify-telemetry-sdk"
+version = "0.1.0"
+description = "A lightweight telemetry SDK for traces, metrics, logs, and auto instrumentation."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+
+authors = [
+  { name = "Mohana Supraja", email = "mohanasupraja.t@gmail.com" }
+]
+
+keywords = ["telemetry", "opentelemetry", "traces", "metrics", "sdk"]
+
+# ---------------------------
+# REQUIRED CORE DEPENDENCIES
+# ---------------------------
+dependencies = [
+  "opentelemetry-api==1.38.0",
+  "opentelemetry-sdk==1.38.0",
+  "opentelemetry-proto==1.38.0",
+  "opentelemetry-semantic-conventions==0.59b0"
+]
+
+# ---------------------------
+# OPTIONAL EXTRAS
+# ---------------------------
+[project.optional-dependencies]
+
+# OTLP Exporters
+exporters = [
+  "opentelemetry-exporter-otlp==1.38.0",
+  "opentelemetry-exporter-otlp-proto-grpc==1.38.0",
+  "opentelemetry-exporter-otlp-proto-http==1.38.0"
+]
+
+# Auto Instrumentation
+auto = [
+  "opentelemetry-instrumentation==0.59b0",
+  "opentelemetry-instrumentation-requests==0.59b0",
+  "opentelemetry-instrumentation-urllib3==0.59b0",
+  "opentelemetry-instrumentation-httpx==0.59b0",
+  "opentelemetry-instrumentation-aiohttp-client==0.59b0",
+  "opentelemetry-instrumentation-flask==0.59b0",
+  "opentelemetry-instrumentation-fastapi==0.59b0",
+  "opentelemetry-instrumentation-django==0.59b0",
+  "opentelemetry-instrumentation-sqlalchemy==0.59b0",
+  "opentelemetry-instrumentation-logging==0.59b0",
+  "opentelemetry-instrumentation-redis==0.59b0",
+  "opentelemetry-instrumentation-wsgi==0.59b0"
+]
+
+[tool.setuptools.packages.find]
+include = ["telemetry*"]
