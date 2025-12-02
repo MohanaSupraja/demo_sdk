@@ -60,7 +60,12 @@ class LogsManager:
                         from opentelemetry.exporter.otlp.proto.http._log_exporter import (
                             OTLPLogExporter,
                         )
-                        log_exporter = OTLPLogExporter(headers=config.headers or {})
+                        # log_exporter = OTLPLogExporter(headers=config.headers or {})
+                        log_exporter = OTLPLogExporter(
+                                        endpoint=f"{config.collector_endpoint}/v1/logs",
+                                        headers=config.headers or {}
+                                        )
+
                     else:
                         # gRPC exporter (optional)
                         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
