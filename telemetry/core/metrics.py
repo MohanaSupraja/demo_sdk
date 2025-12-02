@@ -205,7 +205,7 @@ class MetricsManager:
 
 
 
-f"""Creates and records all OpenTelemetry metric types with automatic fallback when OTel is not installed.
+"""Creates and records all OpenTelemetry metric types with automatic fallback when OTel is not installed.
 
 It supports SIX major metric instruments
 

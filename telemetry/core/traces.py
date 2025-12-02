@@ -198,7 +198,7 @@ class TracesManager:
 # | Full fallback DummySpan   | Never breaks user app             |
 
 
-f"""1️⃣ Core Span Management
+"""1️⃣ Core Span Management
 
 start_span()
 

@@ -174,7 +174,7 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
 
 
 
-f"""setup_otel() initializes OpenTelemetry Tracing + Metrics for your SDK:
+"""setup_otel() initializes OpenTelemetry Tracing + Metrics for your SDK:
 
 Creates resource attributes like service.name
 

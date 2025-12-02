@@ -224,7 +224,7 @@ class LogsManager:
 
 
 
-f"""LogsManager — High-Level Summary
+"""LogsManager — High-Level Summary
 
  ➡️ Sends logs to OpenTelemetry (OTLP HTTP or gRPC)
 

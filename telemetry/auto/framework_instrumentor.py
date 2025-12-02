@@ -160,7 +160,7 @@ class FrameworkInstrumentor:
 
 
 
-f""" Usage scenarios:
+""" Usage scenarios:
 
 # If auto_instrumentation = True - sinstrumentation happens automatically as :
 

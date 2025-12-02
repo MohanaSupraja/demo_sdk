@@ -282,7 +282,7 @@ class FunctionInstrumentor:
 
 
 
-f"""Any function wrapped with instrument_function now automatically creates spans, records metrics (counter + latency histogram),
+"""Any function wrapped with instrument_function now automatically creates spans, records metrics (counter + latency histogram),
  logs success/error with rich context, and never crashes even if OTEL or your collector is misconfigured
  
 ⭐ 1. Starts a trace span for each function call

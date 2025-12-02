@@ -224,7 +224,7 @@ class SifySDKInstrumentor:
         return True
 
 
-f"""
+"""
 SDK-level instrumentation automatically adds traces, metrics, and logs to every method inside YOUR SDK, without the user needing to write decorators or modify code.
 
 It turns your SDK into a self-observable library, just like AWS SDK, Stripe SDK, MongoDB drivers, etc.

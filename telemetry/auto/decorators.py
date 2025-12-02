@@ -299,7 +299,7 @@ def create_decorators(telemetry_instance):
 
 
 
-f"""🔍 1. Telemetry Resolution Layer (_resolve_telemetry)
+"""🔍 1. Telemetry Resolution Layer (_resolve_telemetry)
 
 This utility detects which TelemetryCollector instance should be used:
 

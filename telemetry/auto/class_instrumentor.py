@@ -126,7 +126,7 @@ class ClassInstrumentor:
 
 
 
-f"""Class Instrumentation wraps all public methods of a class with tracing + metrics + logs, records errors,
+"""Class Instrumentation wraps all public methods of a class with tracing + metrics + logs, records errors,
 supports fallbacks, and adds full observability automatically without changing customer code.
 
 It contains two major components:

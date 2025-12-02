@@ -110,7 +110,7 @@ class LibraryInstrumentor:
 
 
 
-f""" If auto_instrumentation = True
+""" If auto_instrumentation = True
 
 # Libraries are auto-instrumented based on instrument_libraries list.
 
