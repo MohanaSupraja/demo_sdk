@@ -16,29 +16,22 @@ authors = [
 
 keywords = ["telemetry", "opentelemetry", "traces", "metrics", "sdk"]
 
-# ---------------------------
-# REQUIRED CORE DEPENDENCIES
-# ---------------------------
 dependencies = [
   "opentelemetry-api==1.38.0",
   "opentelemetry-sdk==1.38.0",
+  "opentelemetry-sdk-metrics==1.38.0",
   "opentelemetry-proto==1.38.0",
   "opentelemetry-semantic-conventions==0.59b0"
 ]
 
-# ---------------------------
-# OPTIONAL EXTRAS
-# ---------------------------
 [project.optional-dependencies]
 
-# OTLP Exporters
 exporters = [
   "opentelemetry-exporter-otlp==1.38.0",
   "opentelemetry-exporter-otlp-proto-grpc==1.38.0",
   "opentelemetry-exporter-otlp-proto-http==1.38.0"
 ]
 
-# Auto Instrumentation
 auto = [
   "opentelemetry-instrumentation==0.59b0",
   "opentelemetry-instrumentation-requests==0.59b0",
@@ -48,8 +41,8 @@ auto = [
   "opentelemetry-instrumentation-flask==0.59b0",
   "opentelemetry-instrumentation-fastapi==0.59b0",
   "opentelemetry-instrumentation-django==0.59b0",
-  "opentelemetry-instrumentation-asgi==0.59b0",//added
-  "aiohttp>=3.8.0",//added
+  "opentelemetry-instrumentation-asgi==0.59b0",
+  "aiohttp>=3.8.0",
   "opentelemetry-instrumentation-sqlalchemy==0.59b0",
   "opentelemetry-instrumentation-logging==0.59b0",
   "opentelemetry-instrumentation-redis==0.59b0",
