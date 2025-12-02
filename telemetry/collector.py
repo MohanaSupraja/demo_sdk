@@ -1,6 +1,5 @@
 import logging
 from typing import Optional, List, Dict, Any
-
 from .config import TelemetryConfig
 from .core.otel_setup import setup_otel
 from .core.traces import TracesManager
@@ -82,6 +81,26 @@ class TelemetryCollector:
                     logger.debug(f"Database instrumentation results: {db_results}")
                 except Exception:
                     logger.debug("Database auto-instrumentation failed", exc_info=True)
+
+
+        
+        # --------------------------------------------------------
+        # 4️⃣ Auto-instrument Python logging (send stdout/stderr to OTEL → Loki)
+        # --------------------------------------------------------
+        if self.config.enable_logs:
+            logger.debug("Auto-instrumenting Python logging...")
+            try:
+                from opentelemetry.instrumentation.logging import LoggingInstrumentor
+
+                LoggingInstrumentor().instrument(
+                    set_logging_format=True,   # attaches trace_id/span_id automatically
+                    log_hook=None              # you may add your own hook if needed
+                )
+
+                logger.debug("Logging Instrumentation enabled successfully.")
+            except Exception:
+                logger.debug("Logging auto-instrumentation failed", exc_info=True)
+
 
     # ---------------- PROPERTIES ----------------
     @property
