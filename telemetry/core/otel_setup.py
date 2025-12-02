@@ -11,8 +11,7 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
     Handles:
       - Traces (HTTP / gRPC / Console fallback)
       - Metrics (HTTP / gRPC / Console fallback)
-      - Span limits, batching
-      - Safe provider override (no warnings)
+      - Logs (HTTP / gRPC / Console fallback)  ← FIXED
     """
 
     providers = {
@@ -43,9 +42,19 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
         # OTLP Exporters
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPTraceExporter
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter as HTTPMetricExporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter as HTTPLogExporter
 
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as GRPCTraceExporter
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter as GRPCMetricExporter
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter as GRPCLogExporter
+
+        # Logs backend
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.sdk._logs.export import (
+            BatchLogRecordProcessor,
+            ConsoleLogExporter,
+        )
 
         # ------------------------------------------------------------
         # Build Resource
@@ -100,14 +109,9 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
 
             tracer_provider.add_span_processor(processor)
 
-            # ----------------------------------------------------
-            # SAFE PROVIDER SET (NO WARNING)
-            # ----------------------------------------------------
             from opentelemetry.trace import get_tracer_provider, TracerProvider as SDKTracerProvider
-
             current = get_tracer_provider()
 
-            # Only override if default provider is a NOOP one
             if not isinstance(current, SDKTracerProvider):
                 trace.set_tracer_provider(tracer_provider)
 
@@ -120,7 +124,6 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
         # METRICS PROVIDER
         # ------------------------------------------------------------
         try:
-            # HTTP or gRPC exporter selection
             try:
                 if use_http and config.collector_endpoint:
                     metric_exporter = HTTPMetricExporter(
@@ -157,9 +160,42 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
             logger.error("Metrics setup failed: %s", e)
 
         # ------------------------------------------------------------
-        # LOGS handled by LogsManager — not here
+        # LOG PROVIDER (FIXED)
         # ------------------------------------------------------------
-        providers["logger_provider"] = None
+        try:
+            logger_provider = LoggerProvider(resource=resource)
+
+            # export via HTTP or gRPC
+            try:
+                if use_http and config.collector_endpoint:
+                    log_exporter = HTTPLogExporter(
+                        endpoint=f"{config.collector_endpoint}/v1/logs",
+                        headers=config.headers or {},
+                    )
+                elif config.collector_endpoint:
+                    log_exporter = GRPCLogExporter(
+                        endpoint=config.collector_endpoint,
+                        insecure=config.insecure,
+                        headers=config.headers or {},
+                    )
+                else:
+                    log_exporter = ConsoleLogExporter()
+
+            except Exception as e:
+                logger.warning("Log exporter failed → console: %s", e)
+                log_exporter = ConsoleLogExporter()
+
+            logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(log_exporter)
+            )
+
+            # REGISTER GLOBALLY  ← REQUIRED for logs to work
+            set_logger_provider(logger_provider)
+
+            providers["logger_provider"] = logger_provider
+
+        except Exception as e:
+            logger.error("Logs setup failed: %s", e)
 
     except Exception as e:
         logger.exception("Global OTEL setup failed: %s", e)
