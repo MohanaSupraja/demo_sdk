@@ -3,10 +3,9 @@ from typing import Optional, List, Dict, Any
 
 from .config import TelemetryConfig
 from .core.otel_setup import setup_otel
-from .traces import TracesManager
-from .metrics import MetricsManager
-from .logs import LogsManager
-
+from .core.traces import TracesManager
+from .core.metrics import MetricsManager
+from .core.logs import LogsManager
 from .auto.library_instrumentor import LibraryInstrumentor
 from .auto.framework_instrumentor import FrameworkInstrumentor
 from .auto.database_instrumentor import DatabaseInstrumentor
