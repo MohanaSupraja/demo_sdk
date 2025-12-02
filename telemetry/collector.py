@@ -30,7 +30,8 @@ class TelemetryCollector:
         # Managers
         self._traces = TracesManager(self.tracer_provider)
         self._metrics = MetricsManager(self.meter_provider)
-        self._logs = LogsManager(self.config)
+        # 🔴 Pass logger_provider into LogsManager so everyone shares same provider
+        self._logs = LogsManager(self.config, self.logger_provider)
 
         # Instrumentors
         self._lib_instrumentor = LibraryInstrumentor()
@@ -82,8 +83,6 @@ class TelemetryCollector:
                 except Exception:
                     logger.debug("Database auto-instrumentation failed", exc_info=True)
 
-
-        
         # --------------------------------------------------------
         # 4️⃣ Auto-instrument Python logging (send stdout/stderr to OTEL → Loki)
         # --------------------------------------------------------
@@ -100,7 +99,6 @@ class TelemetryCollector:
                 logger.debug("Logging Instrumentation enabled successfully.")
             except Exception:
                 logger.debug("Logging auto-instrumentation failed", exc_info=True)
-
 
     # ---------------- PROPERTIES ----------------
     @property

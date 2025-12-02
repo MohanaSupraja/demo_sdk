@@ -7,7 +7,7 @@ import time
 import random
 
 # Correct imports for OTel 1.19.0
-from opentelemetry._logs import SeverityNumber
+from opentelemetry._logs import SeverityNumber, set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogExporter
 from opentelemetry.trace import get_current_span
@@ -40,7 +40,7 @@ class LogsManager:
     - Log sampling support
     """
 
-    def __init__(self, config: TelemetryConfig):
+    def __init__(self, config: TelemetryConfig, logger_provider: Optional[LoggerProvider] = None):
         self.config = config
         self.sample_rate = float(getattr(config, "log_sample_rate", 1.0))
         self.hostname = socket.gethostname()
@@ -49,7 +49,13 @@ class LogsManager:
         # Setup OpenTelemetry Logger
         # ------------------------------
         try:
-            self.otel_logger_provider = LoggerProvider()
+            # Reuse existing provider if given (from setup_otel), otherwise create & register a new one
+            if logger_provider is not None:
+                self.otel_logger_provider = logger_provider
+            else:
+                self.otel_logger_provider = LoggerProvider()
+                # 🔴 IMPORTANT: register as global provider so LoggingInstrumentor + others can use it
+                set_logger_provider(self.otel_logger_provider)
 
             use_http = (config.protocol or "").startswith("http")
 
@@ -60,12 +66,10 @@ class LogsManager:
                         from opentelemetry.exporter.otlp.proto.http._log_exporter import (
                             OTLPLogExporter,
                         )
-                        # log_exporter = OTLPLogExporter(headers=config.headers or {})
                         log_exporter = OTLPLogExporter(
-                                        endpoint=f"{config.collector_endpoint}/v1/logs",
-                                        headers=config.headers or {}
-                                        )
-
+                            endpoint=f"{config.collector_endpoint.rstrip('/')}/v1/logs",
+                            headers=config.headers or {},
+                        )
                     else:
                         # gRPC exporter (optional)
                         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
@@ -77,6 +81,7 @@ class LogsManager:
                             headers=config.headers or {},
                         )
                 else:
+                    # Fallback if logs disabled or no endpoint → console
                     log_exporter = ConsoleLogExporter()
 
             except Exception as e:
@@ -85,10 +90,12 @@ class LogsManager:
                 )
                 log_exporter = ConsoleLogExporter()
 
+            # Attach batch processor to logger provider
             self.otel_logger_provider.add_log_record_processor(
                 BatchLogRecordProcessor(log_exporter)
             )
 
+            # Create logger for this service
             self.otel_logger = self.otel_logger_provider.get_logger(
                 config.service_name or "default"
             )
@@ -175,8 +182,6 @@ class LogsManager:
             message, extra={"otel": attributes}
         )
 
-# This means the log will still appear in: console output,docker logs,file handlers,any Python logging configuration you have
-
     # --------------------------------------------------------
     # Convenience wrappers
     # --------------------------------------------------------
@@ -225,6 +230,7 @@ class LogsManager:
                 handler.flush()
             except Exception:
                 pass
+
 
 
 
