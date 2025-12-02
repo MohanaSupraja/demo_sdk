@@ -22,6 +22,7 @@ keywords = ["telemetry", "opentelemetry", "traces", "metrics", "sdk"]
 dependencies = [
   "opentelemetry-api==1.38.0",
   "opentelemetry-sdk==1.38.0",
+  "opentelemetry-sdk-metrics==1.38.0",//added
   "opentelemetry-proto==1.38.0",
   "opentelemetry-semantic-conventions==0.59b0"
 ]
@@ -48,6 +49,8 @@ auto = [
   "opentelemetry-instrumentation-flask==0.59b0",
   "opentelemetry-instrumentation-fastapi==0.59b0",
   "opentelemetry-instrumentation-django==0.59b0",
+  "opentelemetry-instrumentation-asgi==0.59b0",//added
+  "aiohttp>=3.8.0",//added
   "opentelemetry-instrumentation-sqlalchemy==0.59b0",
   "opentelemetry-instrumentation-logging==0.59b0",
   "opentelemetry-instrumentation-redis==0.59b0",

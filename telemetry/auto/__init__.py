@@ -4,6 +4,7 @@ from .sify_sdk_instrumentor import SifySDKInstrumentor
 from .function_instrumentor import FunctionInstrumentor
 from .class_instrumentor import ClassInstrumentor
 from .decorators import create_decorators
+from .database_instrumentor import DatabaseInstrumentor
 __all__ = [
     "ClassInstrumentor",
     "FrameworkInstrumentor",
@@ -11,4 +12,6 @@ __all__ = [
     "LibraryInstrumentor",
     "SifySDKInstrumentor",
     "create_decorators",
+    "DatabaseInstrumentor",
+
 ]

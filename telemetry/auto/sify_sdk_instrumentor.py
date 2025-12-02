@@ -10,10 +10,14 @@ logger = logging.getLogger(__name__)
 
 class SifySDKInstrumentor:
     """
-    Instruments SDK classes:
-    - Traces: span per method
-    - Metrics: counter + histogram
-    - Logs: emit contextual logs
+    Production-grade SDK Class Instrumentor.
+
+    Provides:
+    - Tracing      → span per method
+    - Metrics      → call counter + duration histogram + errors
+    - Logging      → success/error logs with trace correlation
+    - Async/Sync   → automatically supported
+    - Safe fallback → never breaks user code
     """
 
     def __init__(self, telemetry: Optional[Any] = None, tracer_name: str = __name__):
@@ -21,92 +25,99 @@ class SifySDKInstrumentor:
         self.tracer_name = tracer_name
         self._wrapped = {}
 
-    # -----------------------------------------------------------
-    # TRACER LOAD
-    # -----------------------------------------------------------
+    # --------------------------------------------------------------------
+    # TRACER RESOLUTION (safe)
+    # --------------------------------------------------------------------
     def _get_tracer(self):
         try:
             if self.telemetry and hasattr(self.telemetry, "traces"):
                 return self.telemetry.traces.tracer
         except Exception:
             pass
+
+        # fallback → global tracer
         try:
             from opentelemetry import trace
             return trace.get_tracer(self.tracer_name)
         except Exception:
             return None
 
-    # -----------------------------------------------------------
-    # METRICS HELPERS
-    # -----------------------------------------------------------
+    # --------------------------------------------------------------------
+    # METRICS HELPERS (safe)
+    # --------------------------------------------------------------------
     def _increment_counter(self, name: str, value: float = 1.0, attributes=None):
         attrs = attributes or {}
         try:
             if self.telemetry and hasattr(self.telemetry, "metrics"):
                 self.telemetry.metrics.increment_counter(name, value, attrs)
-                return
         except Exception:
-            logger.debug("telemetry.metrics.increment_counter failed", exc_info=True)
+            logger.debug("Counter metric failed: %s", name, exc_info=True)
 
     def _record_histogram(self, name: str, value: float, attributes=None):
         attrs = attributes or {}
         try:
             if self.telemetry and hasattr(self.telemetry, "metrics"):
                 self.telemetry.metrics.record_histogram(name, value, attrs)
-                return
         except Exception:
-            logger.debug("telemetry.metrics.record_histogram failed", exc_info=True)
+            logger.debug("Histogram metric failed: %s", name, exc_info=True)
 
-    # -----------------------------------------------------------
-    # LOGGING
-    # -----------------------------------------------------------
+    # --------------------------------------------------------------------
+    # LOGGING HELPERS (safe)
+    # --------------------------------------------------------------------
     def _emit_log(self, level: str, message: str, attributes=None):
         attrs = attributes or {}
+
+        # Preferred path → SDK logs
         try:
             if self.telemetry and hasattr(self.telemetry, "logs"):
                 getattr(self.telemetry.logs, level)(message, attrs)
                 return
         except Exception:
-            logger.debug("telemetry.logs failure", exc_info=True)
+            logger.debug("telemetry.logs failed", exc_info=True)
 
-        # fallback logging with trace context
+        # Fallback → Python logger with trace IDs
         try:
             from opentelemetry.trace import get_current_span
             span = get_current_span()
-            ctx = {}
             sc = span.get_span_context()
             if sc and sc.trace_id != 0:
-                ctx["trace_id"] = f"{sc.trace_id:032x}"
-                ctx["span_id"] = f"{sc.span_id:016x}"
-            merged = {**attrs, **ctx}
-            logging.getLogger("sify.sdk").info(f"{message} | {merged}")
+                attrs["trace_id"] = f"{sc.trace_id:032x}"
+                attrs["span_id"] = f"{sc.span_id:016x}"
         except Exception:
-            logging.getLogger("sify.sdk").info(f"{message} | attrs={attrs}")
+            pass
 
-    # -----------------------------------------------------------
-    # CLASS INSTRUMENTATION
-    # -----------------------------------------------------------
+        logging.getLogger("sify.sdk").info(f"{message} | attrs={attrs}")
+
+    # --------------------------------------------------------------------
+    # INSTRUMENT A CLASS (main method)
+    # --------------------------------------------------------------------
     def instrument_class(self, cls: type, prefix: Optional[str] = None) -> bool:
+        """
+        Wrap all public methods with tracing + metrics + logs.
+        """
 
-        for method_name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
+        for method_name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
             if method_name.startswith("_"):
-                continue
+                continue  # skip private/internal
+
+            if getattr(method, "_sify_wrapped", False):
+                continue  # avoid double wrapping
 
             original = getattr(cls, method_name)
 
-            # avoid double wrapping
-            if getattr(original, "_sify_wrapped", False):
-                continue
-
-            base = prefix + "." if prefix else ""
-            base_name = f"{base}{cls.__name__}.{method_name}"
+            # Metric/log naming
+            base_prefix = f"{prefix}." if prefix else ""
+            base_name = f"{base_prefix}{cls.__name__}.{method_name}"
             counter_name = f"{base_name}.calls"
-            hist_name = f"{base_name}.duration_ms"
+            error_counter = f"{base_name}.errors"
+            histogram_name = f"{base_name}.duration_ms"
 
-            # bind local vars into closure
-            def make_wrapper(orig=original, mname=method_name,
-                             c_name=counter_name, h_name=hist_name):
+            # --------------------------
+            # BUILD WRAPPER
+            # --------------------------
+            def make_wrapper(orig=original, mname=method_name):
 
+                # -------- ASYNC FUNCTION --------
                 if inspect.iscoroutinefunction(orig):
 
                     async def async_wrapper(*args, **kwargs):
@@ -123,6 +134,7 @@ class SifySDKInstrumentor:
                                     result = await orig(*args, **kwargs)
                             else:
                                 result = await orig(*args, **kwargs)
+
                             success = True
                             return result
 
@@ -137,16 +149,27 @@ class SifySDKInstrumentor:
 
                         finally:
                             elapsed = (time.perf_counter() - start) * 1000
-                            attrs = {"class": cls.__name__, "method": mname, "success": success}
-                            self._increment_counter(c_name, 1, attrs)
-                            self._record_histogram(h_name, elapsed, attrs)
-                            self._emit_log("info", f"{mname} executed", attrs)
+                            base_attrs = {
+                                "class": cls.__name__,
+                                "method": mname,
+                                "success": success,
+                            }
+
+                            # METRICS
+                            self._increment_counter(counter_name, 1, base_attrs)
+                            if not success:
+                                self._increment_counter(error_counter, 1, base_attrs)
+                            self._record_histogram(histogram_name, elapsed, base_attrs)
+
+                            # LOGS
+                            level = "info" if success else "error"
+                            self._emit_log(level, f"{mname} executed", {**base_attrs, "duration_ms": elapsed})
 
                     async_wrapper._sify_wrapped = True
                     return functools.wraps(orig)(async_wrapper)
 
+                # -------- SYNC FUNCTION --------
                 else:
-
                     def wrapper(*args, **kwargs):
                         tracer = self._get_tracer()
                         start = time.perf_counter()
@@ -161,6 +184,7 @@ class SifySDKInstrumentor:
                                     result = orig(*args, **kwargs)
                             else:
                                 result = orig(*args, **kwargs)
+
                             success = True
                             return result
 
@@ -169,51 +193,143 @@ class SifySDKInstrumentor:
                                 try:
                                     span.record_exception(exc)
                                     span.set_status(StatusCode.ERROR)
-                                except:
+                                except Exception:
                                     pass
                             raise
 
                         finally:
                             elapsed = (time.perf_counter() - start) * 1000
-                            attrs = {"class": cls.__name__, "method": mname, "success": success}
-                            self._increment_counter(c_name, 1, attrs)
-                            self._record_histogram(h_name, elapsed, attrs)
-                            self._emit_log("info", f"{mname} executed", attrs)
+                            base_attrs = {
+                                "class": cls.__name__,
+                                "method": mname,
+                                "success": success,
+                            }
+
+                            # METRICS
+                            self._increment_counter(counter_name, 1, base_attrs)
+                            if not success:
+                                self._increment_counter(error_counter, 1, base_attrs)
+                            self._record_histogram(histogram_name, elapsed, base_attrs)
+
+                            # LOGS
+                            level = "info" if success else "error"
+                            self._emit_log(level, f"{mname} executed", {**base_attrs, "duration_ms": elapsed})
 
                     wrapper._sify_wrapped = True
                     return functools.wraps(orig)(wrapper)
 
             setattr(cls, method_name, make_wrapper())
 
-        logger.info("Instrumented class %s", cls.__name__)
+        logger.info(f"Instrumented SDK class: {cls.__name__}")
         return True
 
 
+f"""
+SDK-level instrumentation automatically adds traces, metrics, and logs to every method inside YOUR SDK, without the user needing to write decorators or modify code.
+
+It turns your SDK into a self-observable library, just like AWS SDK, Stripe SDK, MongoDB drivers, etc.
+
+When someone imports and uses your SDK:
+
+Every SDK method call becomes a trace span
+
+Performance metrics (latency, call count, errors) are recorded
+
+Logs with trace correlation are emitted
+
+Async & sync methods are handled
+
+Errors automatically generate spans + logs
+
+All of this happens inside your SDK, before the user writes any code.
+
+⭐ How SDK-Level Instrumentation Is Used
+
+You enable it once during SDK initialization:
+
+from telemetry.sdk.sdk_instrumentor import SifySDKInstrumentor
+from telemetry import Telemetry
+
+tele = Telemetry()
+instrumentor = SifySDKInstrumentor(tele)
+
+from sify_sdk.client import SifyClient
+instrumentor.instrument_class(SifyClient)
 
 
 
+✅ Example SDK Class (Before Instrumentation)
 
-# import logging, inspect, functools
-# logger = logging.getLogger(__name__)
+Imagine your SDK provides this class to users:
 
-# class SifySDKInstrumentor:
-#     def __init__(self):
-#         self._wrapped = {}
+# file: sify_sdk/client.py
 
-#     def instrument_class(self, cls, prefix: str = None):
-#         for name, member in inspect.getmembers(cls, predicate=inspect.isfunction):
-#             if name.startswith("_"): continue
-#             original = getattr(cls, name)
-#             def make_wrapper(orig, mname):
-#                 def wrapper(*args, **kwargs):
-#                     try:
-#                         from opentelemetry import trace
-#                         tracer = trace.get_tracer(__name__)
-#                         with tracer.start_as_current_span(f"{cls.__name__}.{mname}"):
-#                             return orig(*args, **kwargs)
-#                     except Exception:
-#                         return orig(*args, **kwargs)
-#                 return functools.wraps(orig)(wrapper)
-#             setattr(cls, name, make_wrapper(original, name))
-#         logger.info("Instrumented class %s", cls)
-#         return True
+class SifyClient:
+    def connect(self, endpoint):
+        print("Connecting...")
+        return True
+
+    def fetch_data(self, id):
+        if id == 0:
+            raise ValueError("Invalid ID")
+        return {"id": id, "value": 100}
+
+    async def async_process(self, value):
+        return value * 2
+
+
+✅ Apply SDK-Level Instrumentation
+
+In your SDK startup:
+
+from telemetry.sdk.sdk_instrumentor import SifySDKInstrumentor
+from telemetry import Telemetry  # your unified Telemetry object
+
+tele = Telemetry()
+sdk_inst = SifySDKInstrumentor(telemetry=tele)
+
+# instrument the entire class
+from sify_sdk.client import SifyClient
+sdk_inst.instrument_class(SifyClient)
+
+🎉 After Instrumentation — What Happens Automatically
+
+Now all methods in SifyClient get:
+
+✔ Tracing
+
+Every method call produces a span:
+
+SifyClient.connect
+SifyClient.fetch_data
+SifyClient.async_process
+
+✔ Metrics
+
+Automatically generated:
+
+SifyClient.connect.calls          → number of calls
+SifyClient.connect.duration_ms    → execution time
+SifyClient.connect.errors         → error count
+
+✔ Logs
+
+Structured logs:
+
+"method": "connect",
+"success": true,
+"duration_ms": 3.43
+
+
+If fetch_data fails:
+
+"method": "fetch_data",
+"success": false,
+"exception": "ValueError"
+
+✔ Async Supported
+
+async_process() is wrapped safely with async tracing & metrics.
+
+
+"""

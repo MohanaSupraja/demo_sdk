@@ -9,6 +9,7 @@ from .logs import LogsManager
 
 from .auto.library_instrumentor import LibraryInstrumentor
 from .auto.framework_instrumentor import FrameworkInstrumentor
+from .auto.database_instrumentor import DatabaseInstrumentor
 from .auto.sify_sdk_instrumentor import SifySDKInstrumentor
 from .auto.function_instrumentor import FunctionInstrumentor
 from .auto.class_instrumentor import ClassInstrumentor
@@ -21,7 +22,7 @@ class TelemetryCollector:
     def __init__(self, config: Optional[TelemetryConfig] = None):
         self.config = config or TelemetryConfig()
 
-        # Setup OTel providers for traces/metrics
+        # Setup OTel providers
         providers = setup_otel(self.config)
 
         self.tracer_provider = providers.get("tracer_provider")
@@ -31,13 +32,12 @@ class TelemetryCollector:
         # Managers
         self._traces = TracesManager(self.tracer_provider)
         self._metrics = MetricsManager(self.meter_provider)
-
-        # FIXED: pass config to LogsManager
         self._logs = LogsManager(self.config)
 
         # Instrumentors
         self._lib_instrumentor = LibraryInstrumentor()
         self._fw_instrumentor = FrameworkInstrumentor()
+        self._db_instrumentor = DatabaseInstrumentor()
         self._sify_instrumentor = SifySDKInstrumentor()
         self._func_instrumentor = FunctionInstrumentor()
         self._class_instrumentor = ClassInstrumentor()
@@ -46,24 +46,45 @@ class TelemetryCollector:
 
         self._instrumented_libraries = set()
 
-        # 1. Auto-instrument libraries
-        if self.config.auto_instrument and self.config.instrument_libraries:
-            try:
-                self.enable_auto_instrumentation(self.config.instrument_libraries)
-            except Exception as e:
-                logger.debug(f"Library auto-instrumentation failed: {e}")
-
-        # 2. Auto-instrument frameworks (Flask / FastAPI)
+        # --------------------------------------------------------
+        # 1️⃣ Auto-instrument Framework (Flask / Django / FastAPI)
+        # --------------------------------------------------------
         if self.config.auto_instrument and self.config.instrument_frameworks:
+            logger.debug("Auto-instrumenting framework...")
             try:
-                logger.debug("Auto-instrumenting framework...")
-                # this will detect flask automatically
-                self._fw_instrumentor.instrument_app(self.config.framework_app)
-            except Exception as e:
-                logger.debug(f"Framework auto-instrumentation failed: {e}")
+                if self.config.framework_app:
+                    self._fw_instrumentor.instrument_app(self.config.framework_app)
+                else:
+                    logger.debug("No framework app provided → skipping")
+            except Exception:
+                logger.debug("Framework auto-instrumentation failed", exc_info=True)
 
+        # --------------------------------------------------------
+        # 2️⃣ Auto-instrument Libraries (requests, httpx, urllib3)
+        # --------------------------------------------------------
+        if self.config.auto_instrument and self.config.instrument_libraries:
+            logger.debug("Auto-instrumenting libraries...")
+            try:
+                results = self._lib_instrumentor.instrument(self.config.instrument_libraries)
+                logger.debug(f"Library instrumentation results: {results}")
+                self._instrumented_libraries.update(self.config.instrument_libraries)
+            except Exception:
+                logger.debug("Library auto-instrumentation failed", exc_info=True)
 
-    # Properties
+        # --------------------------------------------------------
+        # 3️⃣ Auto-instrument Databases (SQLA, psycopg2, redis...)
+        # --------------------------------------------------------
+        if self.config.auto_instrument:
+            db_libs = getattr(self.config, "instrument_databases", [])
+            if db_libs:
+                logger.debug(f"Auto-instrumenting databases: {db_libs}")
+                try:
+                    db_results = self._db_instrumentor.instrument(db_libs)
+                    logger.debug(f"Database instrumentation results: {db_results}")
+                except Exception:
+                    logger.debug("Database auto-instrumentation failed", exc_info=True)
+
+    # ---------------- PROPERTIES ----------------
     @property
     def traces(self):
         return self._traces
@@ -80,12 +101,13 @@ class TelemetryCollector:
     def decorators(self):
         return self._decorators
 
-    # Auto instrumentation
+    # ---------------- PUBLIC API ----------------
     def enable_auto_instrumentation(self, libraries: Optional[List[str]] = None):
         libs = libraries or self.config.instrument_libraries or []
-        self._lib_instrumentor.instrument(libs)
+        results = self._lib_instrumentor.instrument(libs)
+        logger.debug(f"Library instrumentation results: {results}")
+
         self._instrumented_libraries.update(libs)
-        logger.info(f"Enabled auto-instrumentation for: {libs}")
         return True
 
     def disable_auto_instrumentation(self):
@@ -95,64 +117,27 @@ class TelemetryCollector:
             except Exception:
                 pass
         self._instrumented_libraries.clear()
-        logger.info("Disabled auto-instrumentation")
-        return True
-    
-    def instrument_sdk_module(self, module_path: str, class_predicate=None):
-        """
-        Import module by path and instrument all classes found.
-        - module_path: import path, e.g. "my_sdk.model_service"
-        - class_predicate: optional callable(cls)->bool to filter which classes to instrument
-        """
-        try:
-            mod = __import__(module_path, fromlist=["*"])
-        except Exception as e:
-            logger.debug("instrument_sdk_module import failed: %s", e, exc_info=True)
-            return False
-
-        from telemetry.auto.sify_sdk_instrumentor import SifySDKInstrumentor
-        instr = SifySDKInstrumentor(telemetry=self)
-        count = 0
-        for name, obj in vars(mod).items():
-            try:
-                if isinstance(obj, type):
-                    if class_predicate and not class_predicate(obj):
-                        continue
-                    # instrument the class
-                    try:
-                        instr.instrument_class(obj)
-                        count += 1
-                    except Exception:
-                        logger.debug("instrument_class failed for %s", obj, exc_info=True)
-            except Exception:
-                continue
-        logger.info("Instrumented %d classes in module %s", count, module_path)
         return True
 
+    def instrument_database(self, db_libs: List[str]):
+        """Manual DB instrumentation"""
+        return self._db_instrumentor.instrument(db_libs)
 
     def instrument_library(self, library_name: str):
         self._lib_instrumentor.instrument([library_name])
         self._instrumented_libraries.add(library_name)
         return True
 
-    def uninstrument_library(self, library_name: str):
-        return self._lib_instrumentor.uninstrument(library_name)
+    def instrument_app(self, app: Any, framework: str = None):
+        return self._fw_instrumentor.instrument_app(app, framework)
 
-    def get_instrumented_libraries(self) -> List[str]:
-        return list(self._instrumented_libraries)
-
-    def instrument_app(self, app: Any):
-        return self._fw_instrumentor.instrument_app(app)
-
-    # def instrument_class(self, cls, prefix: str = None):
-    #     return self._sify_instrumentor.instrument_class(cls, prefix)
     def instrument_class(self, cls, prefix=None):
         return self._class_instrumentor.instrument(cls, self, prefix)
 
     def instrument_function(self, func, name: str = None):
         return self._func_instrumentor.instrument(func, name)
 
-    # Context propagation
+    # ---------------- CONTEXT ----------------
     def inject_context(self, carrier: Dict[str, str], context=None):
         try:
             from .utils.context import inject
@@ -168,7 +153,7 @@ class TelemetryCollector:
         except Exception:
             return None
 
-    # Lifecycle methods
+    # ---------------- LIFECYCLE ----------------
     def flush(self, timeout_ms: int = 30000) -> bool:
         try:
             if hasattr(self.tracer_provider, "force_flush"):

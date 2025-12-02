@@ -94,3 +94,10 @@ After installation please conform with:
 
 from telemetry import TelemetryCollector, TelemetryConfig
 print("SDK imported successfully!")
+
+
+
+
+
+Auto-instrumentation handles frameworks + libraries.
+Manual instrumentation handles your business logic — either via decorators,func/class instrumentation or direct method calls.
