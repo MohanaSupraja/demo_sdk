@@ -47,6 +47,9 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as GRPCTraceExporter
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter as GRPCMetricExporter
 
+        # For compression enum
+        from opentelemetry.exporter.otlp.proto.common import CompressionOptions
+
         # ------------------------------------------------------------
         # Build Resource
         # ------------------------------------------------------------
@@ -54,7 +57,7 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
         resource_attrs["service.name"] = config.service_name
 
         resource = Resource(attributes=resource_attrs)
-        use_http = (config.protocol or "").startswith("http")
+        use_http = (config.protocol or "").lower().startswith("http")
 
         # ------------------------------------------------------------
         # TRACE PROVIDER
@@ -77,14 +80,14 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
                     span_exporter = HTTPTraceExporter(
                         endpoint=f"{config.collector_endpoint}/v1/traces",
                         headers=config.headers or {},
-                        compression="gzip",
+                        compression=CompressionOptions.Gzip,
                     )
                 elif config.collector_endpoint:
                     span_exporter = GRPCTraceExporter(
                         endpoint=config.collector_endpoint,
                         insecure=config.insecure,
                         headers=config.headers or {},
-                        compression="gzip",
+                        compression=CompressionOptions.Gzip,
                     )
                 else:
                     span_exporter = ConsoleSpanExporter()
@@ -128,14 +131,14 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
                     metric_exporter = HTTPMetricExporter(
                         endpoint=f"{config.collector_endpoint}/v1/metrics",
                         headers=config.headers or {},
-                        compression="gzip",
+                        compression=CompressionOptions.Gzip,
                     )
                 elif config.collector_endpoint:
                     metric_exporter = GRPCMetricExporter(
                         endpoint=config.collector_endpoint,
                         insecure=config.insecure,
                         headers=config.headers or {},
-                        compression="gzip",
+                        compression=CompressionOptions.Gzip,
                     )
                 else:
                     metric_exporter = ConsoleMetricExporter()
