@@ -30,7 +30,6 @@ class TelemetryCollector:
         # Managers
         self._traces = TracesManager(self.tracer_provider)
         self._metrics = MetricsManager(self.meter_provider)
-        # 🔴 Pass logger_provider into LogsManager so everyone shares same provider
         self._logs = LogsManager(self.config, self.logger_provider)
 
         # Instrumentors
@@ -42,7 +41,6 @@ class TelemetryCollector:
         self._class_instrumentor = ClassInstrumentor()
 
         self._decorators = create_decorators(self)
-
         self._instrumented_libraries = set()
 
         # --------------------------------------------------------
@@ -53,8 +51,6 @@ class TelemetryCollector:
             try:
                 if self.config.framework_app:
                     self._fw_instrumentor.instrument_app(self.config.framework_app)
-                else:
-                    logger.debug("No framework app provided → skipping")
             except Exception:
                 logger.debug("Framework auto-instrumentation failed", exc_info=True)
 
@@ -62,43 +58,86 @@ class TelemetryCollector:
         # 2️⃣ Auto-instrument Libraries (requests, httpx, urllib3)
         # --------------------------------------------------------
         if self.config.auto_instrument and self.config.instrument_libraries:
-            logger.debug("Auto-instrumenting libraries...")
             try:
                 results = self._lib_instrumentor.instrument(self.config.instrument_libraries)
-                logger.debug(f"Library instrumentation results: {results}")
                 self._instrumented_libraries.update(self.config.instrument_libraries)
             except Exception:
                 logger.debug("Library auto-instrumentation failed", exc_info=True)
 
         # --------------------------------------------------------
-        # 3️⃣ Auto-instrument Databases (SQLA, psycopg2, redis...)
+        # 3️⃣ Auto-instrument Databases
         # --------------------------------------------------------
         if self.config.auto_instrument:
             db_libs = getattr(self.config, "instrument_databases", [])
             if db_libs:
-                logger.debug(f"Auto-instrumenting databases: {db_libs}")
                 try:
-                    db_results = self._db_instrumentor.instrument(db_libs)
-                    logger.debug(f"Database instrumentation results: {db_results}")
+                    self._db_instrumentor.instrument(db_libs)
                 except Exception:
-                    logger.debug("Database auto-instrumentation failed", exc_info=True)
+                    logger.debug("DB instrumentation failed", exc_info=True)
 
         # --------------------------------------------------------
-        # 4️⃣ Auto-instrument Python logging (send stdout/stderr to OTEL → Loki)
+        # 4️⃣ Auto-instrument Python logging → Loki
+        #     ✔ Captures ALL Python logs
+        #     ✔ Injects trace_id/span_id
+        #     ✔ Sends to OTEL → Collector → Loki
         # --------------------------------------------------------
         if self.config.enable_logs:
-            logger.debug("Auto-instrumenting Python logging...")
             try:
                 from opentelemetry.instrumentation.logging import LoggingInstrumentor
-
-                LoggingInstrumentor().instrument(
-                    set_logging_format=True,   # attaches trace_id/span_id automatically
-                    log_hook=None              # you may add your own hook if needed
-                )
-
-                logger.debug("Logging Instrumentation enabled successfully.")
+                LoggingInstrumentor().instrument(set_logging_format=True)
+                self._enable_python_auto_log_capture()
+                logger.debug("Python auto log capture enabled.")
             except Exception:
-                logger.debug("Logging auto-instrumentation failed", exc_info=True)
+                logger.debug("Python logging auto-instrumentation failed", exc_info=True)
+
+    # --------------------------------------------------------
+    # 🔥 NEW METHOD: EXPORT NORMAL PYTHON LOGS → OTEL → LOKI
+    # --------------------------------------------------------
+    def _enable_python_auto_log_capture(self):
+        """
+        Automatically capture ALL logs created with `logging` module
+        and route them through OpenTelemetry Log pipeline.
+        """
+        import logging
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.trace import get_current_span
+
+        provider = self._logs.otel_logger_provider
+        set_logger_provider(provider)
+
+        otel_logger = provider.get_logger(self.config.service_name)
+
+        class OTelLoggingHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord):
+                try:
+                    # Inject trace context
+                    span_ctx = get_current_span().get_span_context()
+                    trace_attrs = {}
+
+                    if span_ctx and span_ctx.trace_id != 0:
+                        trace_attrs = {
+                            "trace_id": f"{span_ctx.trace_id:032x}",
+                            "span_id": f"{span_ctx.span_id:016x}",
+                        }
+
+                    # Push log into OTEL pipeline
+                    otel_logger.emit(
+                        body=record.getMessage(),
+                        severity_text=record.levelname,
+                        severity_number=record.levelno,
+                        attributes={
+                            "logger.name": record.name,
+                            "file": record.filename,
+                            "line": record.lineno,
+                            **trace_attrs,
+                        },
+                    )
+                except Exception:
+                    pass  # important: never break app logging
+
+        root = logging.getLogger()
+        root.addHandler(OTelLoggingHandler())
+        root.setLevel(logging.INFO)
 
     # ---------------- PROPERTIES ----------------
     @property
@@ -120,9 +159,7 @@ class TelemetryCollector:
     # ---------------- PUBLIC API ----------------
     def enable_auto_instrumentation(self, libraries: Optional[List[str]] = None):
         libs = libraries or self.config.instrument_libraries or []
-        results = self._lib_instrumentor.instrument(libs)
-        logger.debug(f"Library instrumentation results: {results}")
-
+        self._lib_instrumentor.instrument(libs)
         self._instrumented_libraries.update(libs)
         return True
 
@@ -136,7 +173,6 @@ class TelemetryCollector:
         return True
 
     def instrument_database(self, db_libs: List[str]):
-        """Manual DB instrumentation"""
         return self._db_instrumentor.instrument(db_libs)
 
     def instrument_library(self, library_name: str):
