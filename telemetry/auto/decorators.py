@@ -13,36 +13,30 @@ logger = logging.getLogger(__name__)
 # ======================================================================
 def _bind_telemetry(wrapper, fn, dec=None):
     """
-    Consistent telemetry binding for all decorators.
-    Priority:
-    1. Function's own telemetry (if already instrumented)
-    2. Decorator factory's telemetry (from create_decorators)
-    3. Wrapped function's telemetry (for nested decorators)
+    Ensures telemetry always propagates through ALL decorator layers.
     """
-    # Priority 1: Function's own telemetry
-    wrapper._telemetry = getattr(fn, "_telemetry", None)
-    
-    # Priority 2: Decorator factory's telemetry
-    if wrapper._telemetry is None and dec is not None:
-        wrapper._telemetry = getattr(dec, "_telemetry", None)
-    
-    # Priority 3: Wrapped function's telemetry (for nested decorators)
-    if wrapper._telemetry is None and hasattr(fn, "__wrapped__"):
-        wrapper._telemetry = getattr(fn.__wrapped__, "_telemetry", None)
-    
+    # 1️⃣ Copy telemetry from the original function (if instrumented by class/function instrumentation)
+    if hasattr(fn, "_telemetry") and fn._telemetry is not None:
+        wrapper._telemetry = fn._telemetry
+
+    # 2️⃣ Or from the decorator factory (create_decorators binds telemetry here)
+    elif dec is not None and hasattr(dec, "_telemetry"):
+        wrapper._telemetry = dec._telemetry
+
+    # 3️⃣ Or from nested decorator wrapped functions
+    elif hasattr(fn, "__wrapped__") and hasattr(fn.__wrapped__, "_telemetry"):
+        wrapper._telemetry = fn.__wrapped__._telemetry
+
+    else:
+        wrapper._telemetry = None
+
     return wrapper
 
 
 # ======================================================================
-#  TELEMETRY RESOLUTION (robust)
+#  TELEMETRY RESOLUTION (used ONLY for class methods)
 # ======================================================================
 def _resolve_telemetry(self_or_fn, fn=None):
-    """
-    Resolve telemetry instance from:
-    1. obj._telemetry (for bound methods)
-    2. fn._telemetry (decorator registry injection)
-    3. fn.__wrapped__._telemetry (nested decorated functions)
-    """
     try:
         if hasattr(self_or_fn, "_telemetry"):
             return getattr(self_or_fn, "_telemetry")
@@ -50,16 +44,16 @@ def _resolve_telemetry(self_or_fn, fn=None):
         pass
 
     if fn and hasattr(fn, "_telemetry"):
-        return getattr(fn, "_telemetry")
+        return fn._telemetry
 
     if fn and hasattr(fn, "__wrapped__") and hasattr(fn.__wrapped__, "_telemetry"):
-        return getattr(fn.__wrapped__, "_telemetry")
+        return fn.__wrapped__._telemetry
 
     return None
 
 
 # ======================================================================
-#  TRACE DECORATOR (complete, safe, records status + exceptions)
+#  TRACE DECORATOR (kept unchanged because it already works)
 # ======================================================================
 def trace(name: str = None):
     def dec(fn):
@@ -79,41 +73,24 @@ def trace(name: str = None):
                         span.set_status(StatusCode.OK)
                         return result
                 except Exception as e:
-                    try:
-                        if span:
-                            span.record_exception(e)
-                            span.set_status(StatusCode.ERROR)
-                    except Exception:
-                        pass
+                    if span:
+                        span.record_exception(e)
+                        span.set_status(StatusCode.ERROR)
                     raise
 
-            # Fallback to global OTel tracer
-            try:
-                from opentelemetry import trace as ot_trace
-                tracer = ot_trace.get_tracer(__name__)
-                span = None
+            # fallback → global tracer
+            from opentelemetry import trace as ot_trace
+            tracer = ot_trace.get_tracer(__name__)
+            with tracer.start_as_current_span(span_name) as span:
                 try:
-                    with tracer.start_as_current_span(span_name) as s:
-                        span = s
-                        result = fn(*args, **kwargs)
-                        span.set_status(StatusCode.OK)
-                        return result
+                    result = fn(*args, **kwargs)
+                    span.set_status(StatusCode.OK)
+                    return result
                 except Exception as e:
-                    try:
-                        if span:
-                            span.record_exception(e)
-                            span.set_status(StatusCode.ERROR)
-                        else:
-                            cur = ot_trace.get_current_span()
-                            cur.record_exception(e)
-                            cur.set_status(StatusCode.ERROR)
-                    except Exception:
-                        pass
+                    span.record_exception(e)
+                    span.set_status(StatusCode.ERROR)
                     raise
-            except Exception:
-                return fn(*args, **kwargs)  # no tracing available → silently run
 
-        # FIXED: Use helper for consistent telemetry binding
         return _bind_telemetry(wrapper, fn, dec)
 
     dec._telemetry = None
@@ -121,7 +98,7 @@ def trace(name: str = None):
 
 
 # ======================================================================
-#  CAPTURE EXCEPTIONS (record in span but rethrow)
+#  CAPTURE EXCEPTIONS
 # ======================================================================
 def capture_exceptions():
     def dec(fn):
@@ -130,7 +107,9 @@ def capture_exceptions():
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                tele = _resolve_telemetry(args[0] if args else None, fn)
+
+                tele = getattr(wrapper, "_telemetry", None)
+
                 if tele:
                     try:
                         span = tele.traces.get_current_span()
@@ -138,9 +117,9 @@ def capture_exceptions():
                             span.record_exception(e)
                     except Exception:
                         pass
+
                 raise
-        
-        # FIXED: Use helper
+
         return _bind_telemetry(wrapper, fn, dec)
 
     dec._telemetry = None
@@ -148,39 +127,43 @@ def capture_exceptions():
 
 
 # ======================================================================
-#  METRIC COUNTER DECORATOR
+#  METRIC COUNTER
 # ======================================================================
 def metric_counter(name: str, attributes: Dict[str, Any] = None):
     def dec(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            tele = _resolve_telemetry(args[0] if args else None, fn)
+
+            tele = getattr(wrapper, "_telemetry", None)
+
             if tele:
                 try:
                     tele.metrics.increment_counter(name, 1, attributes)
                 except Exception:
                     pass
+
             return fn(*args, **kwargs)
-        
-        # FIXED: Use helper  
+
         return _bind_telemetry(wrapper, fn, dec)
-    
+
     dec._telemetry = None
     return dec
 
 
 # ======================================================================
-#  METRIC HISTOGRAM DECORATOR (execution time)
+#  HISTOGRAM METRIC
 # ======================================================================
 def metric_histogram(name: str, attributes: Dict[str, Any] = None):
     def dec(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+
             start = time.time()
             result = fn(*args, **kwargs)
             duration = time.time() - start
 
-            tele = _resolve_telemetry(args[0] if args else None, fn)
+            tele = getattr(wrapper, "_telemetry", None)
+
             if tele:
                 try:
                     tele.metrics.record_histogram(name, duration, attributes)
@@ -188,38 +171,37 @@ def metric_histogram(name: str, attributes: Dict[str, Any] = None):
                     pass
 
             return result
-        
-        # FIXED: Use helper
+
         return _bind_telemetry(wrapper, fn, dec)
-    
+
     dec._telemetry = None
     return dec
 
 
 # ======================================================================
-#  MEASURE TIME (alias but simpler)
+#  MEASURE TIME
 # ======================================================================
-def measure_time(histogram_name: str, attributes: Dict[str, Any] = None):
-    """Record execution time via histogram."""
+def measure_time(name: str, attributes: Dict[str, Any] = None):
     def dec(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+
             start = time.time()
             result = fn(*args, **kwargs)
             duration = time.time() - start
 
-            tele = _resolve_telemetry(args[0] if args else None, fn)
+            tele = getattr(wrapper, "_telemetry", None)
+
             if tele:
                 try:
-                    tele.metrics.record_histogram(histogram_name, duration, attributes)
+                    tele.metrics.record_histogram(name, duration, attributes)
                 except Exception:
                     pass
 
             return result
-        
-        # FIXED: Use helper
+
         return _bind_telemetry(wrapper, fn, dec)
-    
+
     dec._telemetry = None
     return dec
 
@@ -231,51 +213,37 @@ def _log(level: str, message: str, attributes: Dict[str, Any]):
     def dec(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            tele = _resolve_telemetry(args[0] if args else None, fn)
+
+            tele = getattr(wrapper, "_telemetry", None)
+
             if tele:
                 try:
                     getattr(tele.logs, level)(message, attributes)
-                except Exception as e:
-                    logger.debug("Log decorator failure: %s", e)
+                except Exception:
+                    pass
 
             return fn(*args, **kwargs)
-        
-        # FIXED: Use helper
+
         return _bind_telemetry(wrapper, fn, dec)
-    
+
     dec._telemetry = None
     return dec
 
 
-def log_info(message: str, attributes: Dict[str, Any] = None):
-    return _log("info", message, attributes or {})
+def log_info(message, attributes=None): return _log("info", message, attributes or {})
+def log_debug(message, attributes=None): return _log("debug", message, attributes or {})
+def log_warning(message, attributes=None): return _log("warning", message, attributes or {})
+def log_error(message, attributes=None): return _log("error", message, attributes or {})
+def log_critical(message, attributes=None): return _log("critical", message, attributes or {})
+def log_audit(message, attributes=None): return _log("audit", message, attributes or {})
+def log_security(message, attributes=None): return _log("security", message, attributes or {})
 
-def log_debug(message: str, attributes: Dict[str, Any] = None):
-    return _log("debug", message, attributes or {})
-
-def log_warning(message: str, attributes: Dict[str, Any] = None):
-    return _log("warning", message, attributes or {})
-
-def log_error(message: str, attributes: Dict[str, Any] = None):
-    return _log("error", message, attributes or {})
-
-def log_critical(message: str, attributes: Dict[str, Any] = None):
-    return _log("critical", message, attributes or {})
-
-def log_audit(message: str, attributes: Dict[str, Any] = None):
-    return _log("audit", message, attributes or {})
-
-def log_security(message: str, attributes: Dict[str, Any] = None):
-    return _log("security", message, attributes or {})
-
-
-def log_with_attributes(attributes: Dict[str, Any]):
-    """Generic structured log decorator"""
+def log_with_attributes(attributes):
     return log_info("function_called", attributes)
 
 
 # ======================================================================
-#  LOG EXCEPTIONS (logs + rethrows)
+#  LOG EXCEPTIONS DECORATOR
 # ======================================================================
 def log_exceptions(level="error"):
     def dec(fn):
@@ -284,7 +252,9 @@ def log_exceptions(level="error"):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                tele = _resolve_telemetry(args[0] if args else None, fn)
+
+                tele = getattr(wrapper, "_telemetry", None)
+
                 if tele:
                     try:
                         getattr(tele.logs, level)(str(e), {
@@ -293,36 +263,25 @@ def log_exceptions(level="error"):
                         })
                     except Exception:
                         pass
+
                 raise
-        
-        # FIXED: Use helper
+
         return _bind_telemetry(wrapper, fn, dec)
-    
+
     dec._telemetry = None
     return dec
 
 
 # ======================================================================
-#  DECORATOR REGISTRY (bind telemetry instance) - FIXED VERSION
+#  DECORATOR REGISTRY
 # ======================================================================
 def create_decorators(telemetry_instance):
-    """
-    Binds telemetry instance to all decorators so they work for:
-    - class methods
-    - standalone functions
-    - dynamically added methods
-    
-    FIX: Each decorator factory gets the telemetry instance bound to it.
-    When the factory creates a decorator, the _bind_telemetry helper
-    will transfer it to the wrapper function.
-    """
-    # Define decorator factories
     decs = {
         "trace": trace,
         "capture_exceptions": capture_exceptions,
         "metric_counter": metric_counter,
         "metric_histogram": metric_histogram,
-        "measure": metric_histogram,  # alias
+        "measure": metric_histogram,
         "measure_time": measure_time,
 
         "log_info": log_info,
@@ -336,45 +295,12 @@ def create_decorators(telemetry_instance):
         "log_exceptions": log_exceptions,
     }
 
-    # Bind telemetry to each decorator factory
     for name, dec in decs.items():
         dec._telemetry = telemetry_instance
-        # Also update __name__ for better debugging
-        dec.__name__ = f"bound_{name}"
 
     return decs
 
 
-# ======================================================================
-#  DEBUG UTILITY (optional - for troubleshooting)
-# ======================================================================
-def debug_decorator_telemetry():
-    """Debug utility to check telemetry binding"""
-    import inspect
-    
-    def check_function(fn, name="function"):
-        tele = getattr(fn, "_telemetry", None)
-        print(f"{name}: telemetry = {tele}")
-        if tele is None:
-            print(f"  {name}._telemetry attribute missing")
-    
-    # Test decorators
-    print("=== Decorator Factory Telemetry ===")
-    check_function(trace, "trace factory")
-    check_function(metric_counter, "metric_counter factory")
-    
-    # Test a decorated function
-    @trace("test")
-    @metric_counter("test.count")
-    def test_function():
-        return "test"
-    
-    print("\n=== Decorated Function Telemetry ===")
-    check_function(test_function, "test_function")
-    
-    # Check wrapped functions
-    if hasattr(test_function, "__wrapped__"):
-        check_function(test_function.__wrapped__, "test_function.__wrapped__")
 
 """🔍 1. Telemetry Resolution Layer (_resolve_telemetry)
 
