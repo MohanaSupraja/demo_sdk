@@ -1,3 +1,13 @@
+"""
+FUNCTION INSTRUMENTATION – CLEAN + PRODUCTION READY
+
+Purpose:
+- Works even if OTEL missing
+- Works even if TelemetryCollector missing
+- Full traces/metrics/logs when available
+- Graceful fallback when parts unavailable
+"""
+
 import functools
 import logging
 import time
@@ -5,187 +15,134 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Try to import StatusCode, but don't crash if OTEL is missing
+# ------------------------------
+#  OPTIONAL OTEL StatusCode
+# ------------------------------
 try:
     from opentelemetry.trace import StatusCode
-except Exception:  # pragma: no cover - OTEL not installed
+except Exception:
     class _DummyStatusCode:
         ERROR = "ERROR"
     StatusCode = _DummyStatusCode()
 
-# Reuse the same telemetry resolver used everywhere else
+# Resolve TelemetryCollector
 from telemetry.auto.decorators import _resolve_telemetry
 
 
-def instrument_function(func, name: Optional[str] = None):
-    """
-    Production-ready function instrumentation.
+# =====================================================================
+#  MAIN FUNCTION INSTRUMENTOR
+# =====================================================================
+def instrument_function(fn, name: Optional[str] = None):
+    span_name = name or fn.__name__
 
-    Responsibilities:
-    - Create a trace span around the function
-    - Record duration as a histogram
-    - Increment a call counter
-    - Log success/failure with enriched attributes
-    - Fallbacks:
-        * If TelemetryCollector is unavailable → use global OTEL tracer
-        * If OTEL is unavailable → only metrics/logs (if Telemetry exists)
-        * If nothing is available → just run the function
-    """
-
-    span_name = name or func.__name__
     counter_name = f"{span_name}.calls"
     histogram_name = f"{span_name}.duration_ms"
 
-    @functools.wraps(func)
+    @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        # Resolve TelemetryCollector instance if available
-        tele = _resolve_telemetry(args[0] if args else None, func)
 
-        start_time = time.time()
-        base_attrs: Dict[str, Any] = {
+        tele = _resolve_telemetry(args[0] if args else None, fn)
+
+        start = time.time()
+
+        base_attrs = {
             "function.name": span_name,
-            "function.module": getattr(func, "__module__", ""),
+            "function.module": fn.__module__,
         }
 
-        def _record_metrics_and_logs_success(duration_ms: float):
-            """Best-effort metrics + logs on success."""
-            if not tele:
-                return
+        # --------------------------
+        # INTERNAL HELPERS
+        # --------------------------
+        def log_success(duration):
+            if not tele: return
 
-            # METRICS
+            # METRIC COUNTER
             try:
-                if getattr(tele, "metrics", None):
-                    tele.metrics.increment_counter(
-                        counter_name,
-                        1.0,
-                        {"outcome": "success", **base_attrs},
-                    )
-                    tele.metrics.record_histogram(
-                        histogram_name,
-                        duration_ms,
-                        {"outcome": "success", **base_attrs},
-                    )
+                if tele.metrics:
+                    tele.metrics.increment_counter(counter_name, 1, {
+                        **base_attrs,
+                        "outcome": "success"
+                    })
+                    tele.metrics.record_histogram(histogram_name, duration, {
+                        **base_attrs,
+                        "outcome": "success"
+                    })
             except Exception:
-                logger.debug(
-                    "Function metrics recording failed for %s", span_name, exc_info=True
-                )
+                logger.debug("Metric success recording failed", exc_info=True)
 
             # LOGS
             try:
-                if getattr(tele, "logs", None):
+                if tele.logs:
                     tele.logs.info(
-                        f"Function {span_name} executed successfully",
-                        {
-                            "duration_ms": duration_ms,
-                            "outcome": "success",
-                            **base_attrs,
-                        },
+                        f"{span_name} executed successfully",
+                        {**base_attrs, "duration_ms": duration}
                     )
             except Exception:
-                logger.debug(
-                    "Function success logging failed for %s", span_name, exc_info=True
-                )
+                logger.debug("Log success recording failed", exc_info=True)
 
-        def _record_metrics_and_logs_error(exc: Exception, duration_ms: float):
-            """Best-effort metrics + logs on error."""
-            if not tele:
-                return
+        def log_error(exc, duration):
+            if not tele: return
 
-            # METRICS
             try:
-                if getattr(tele, "metrics", None):
-                    tele.metrics.increment_counter(
-                        counter_name,
-                        1.0,
-                        {
-                            "outcome": "error",
-                            "exception.type": type(exc).__name__,
-                            **base_attrs,
-                        },
-                    )
-                    tele.metrics.record_histogram(
-                        histogram_name,
-                        duration_ms,
-                        {
-                            "outcome": "error",
-                            "exception.type": type(exc).__name__,
-                            **base_attrs,
-                        },
-                    )
+                if tele.metrics:
+                    tele.metrics.increment_counter(counter_name, 1, {
+                        **base_attrs,
+                        "outcome": "error",
+                        "exception.type": type(exc).__name__,
+                    })
+                    tele.metrics.record_histogram(histogram_name, duration, {
+                        **base_attrs,
+                        "outcome": "error",
+                        "exception.type": type(exc).__name__,
+                    })
             except Exception:
-                logger.debug(
-                    "Function error metrics recording failed for %s",
-                    span_name,
-                    exc_info=True,
-                )
+                logger.debug("Metric error recording failed", exc_info=True)
 
-            # LOGS
             try:
-                if getattr(tele, "logs", None):
+                if tele.logs:
                     tele.logs.error(
-                        f"Error in function {span_name}",
+                        f"Error in {span_name}",
                         {
-                            "duration_ms": duration_ms,
+                            **base_attrs,
+                            "duration_ms": duration,
                             "exception.type": type(exc).__name__,
                             "exception.message": str(exc),
-                            **base_attrs,
-                        },
+                        }
                     )
             except Exception:
-                logger.debug(
-                    "Function error logging failed for %s", span_name, exc_info=True
-                )
+                logger.debug("Log error recording failed", exc_info=True)
 
-        # ------------------------------------------------------------------
-        # CASE 1: We have a TelemetryCollector with a tracer → full power
-        # ------------------------------------------------------------------
+        # =================================================================
+        # CASE 1 — TelemetryCollector has a TRACER → FULL POWER
+        # =================================================================
         if tele and getattr(tele, "traces", None) and getattr(tele.traces, "tracer", None):
             tracer = tele.traces.tracer
             span = None
-
             try:
-                with tracer.start_as_current_span(span_name) as s:
-                    span = s
-                    # enrich span with basic attributes
-                    try:
-                        span.set_attribute("function.name", span_name)
-                        span.set_attribute("function.module", base_attrs["function.module"])
-                    except Exception:
-                        pass
+                with tracer.start_as_current_span(span_name) as span:
+                    span.set_attribute("function.name", span_name)
+                    span.set_attribute("function.module", fn.__module__)
 
-                    result = func(*args, **kwargs)
+                    result = fn(*args, **kwargs)
 
-                    # success path
-                    duration_ms = (time.time() - start_time) * 1000.0
-                    try:
-                        span.set_attribute("duration_ms", duration_ms)
-                    except Exception:
-                        pass
+                    duration = (time.time() - start) * 1000
+                    span.set_attribute("duration_ms", duration)
 
-                    _record_metrics_and_logs_success(duration_ms)
+                    log_success(duration)
                     return result
 
-            except Exception as e:
-                # error path
-                duration_ms = (time.time() - start_time) * 1000.0
-                try:
-                    if span:
-                        span.record_exception(e)
-                        try:
-                            span.set_status(StatusCode.ERROR)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                _record_metrics_and_logs_error(e, duration_ms)
+            except Exception as exc:
+                duration = (time.time() - start) * 1000
+                span.record_exception(exc)
+                span.set_status(StatusCode.ERROR)
+                log_error(exc, duration)
                 raise
 
-        # ------------------------------------------------------------------
-        # CASE 2: No TelemetryCollector, but global OTEL tracer is available
-        # ------------------------------------------------------------------
+        # =================================================================
+        # CASE 2 — No TelemetryCollector but OTEL GLOBAL TRACER IS AVAILABLE
+        # =================================================================
         try:
-            from opentelemetry import trace as ot_trace  # type: ignore
+            from opentelemetry import trace as ot_trace
             tracer = ot_trace.get_tracer(__name__)
         except Exception:
             tracer = None
@@ -193,80 +150,58 @@ def instrument_function(func, name: Optional[str] = None):
         if tracer:
             span = None
             try:
-                with tracer.start_as_current_span(span_name) as s:
-                    span = s
-                    try:
-                        span.set_attribute("function.name", span_name)
-                        span.set_attribute("function.module", base_attrs["function.module"])
-                    except Exception:
-                        pass
+                with tracer.start_as_current_span(span_name) as span:
+                    span.set_attribute("function.name", span_name)
+                    span.set_attribute("function.module", fn.__module__)
 
-                    result = func(*args, **kwargs)
+                    result = fn(*args, **kwargs)
 
-                    duration_ms = (time.time() - start_time) * 1000.0
-                    try:
-                        span.set_attribute("duration_ms", duration_ms)
-                    except Exception:
-                        pass
+                    duration = (time.time() - start) * 1000
+                    span.set_attribute("duration_ms", duration)
 
-                    # We still try metrics/logs if tele exists
-                    _record_metrics_and_logs_success(duration_ms)
+                    if tele:
+                        log_success(duration)
                     return result
 
-            except Exception as e:
-                duration_ms = (time.time() - start_time) * 1000.0
+            except Exception as exc:
+                duration = (time.time() - start) * 1000
                 try:
-                    if span:
-                        span.record_exception(e)
-                        try:
-                            span.set_status(StatusCode.ERROR)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            cur = ot_trace.get_current_span()
-                            cur.record_exception(e)
-                            try:
-                                cur.set_status(StatusCode.ERROR)
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
+                    span.record_exception(exc)
+                    span.set_status(StatusCode.ERROR)
                 except Exception:
                     pass
 
-                _record_metrics_and_logs_error(e, duration_ms)
+                if tele:
+                    log_error(exc, duration)
                 raise
 
-        # ------------------------------------------------------------------
-        # CASE 3: No tracer at all → only metrics/logs (if Telemetry exists)
-        # ------------------------------------------------------------------
+        # =================================================================
+        # CASE 3 — No TRACING AT ALL → Only metrics/logs
+        # =================================================================
         try:
-            result = func(*args, **kwargs)
-            duration_ms = (time.time() - start_time) * 1000.0
-            _record_metrics_and_logs_success(duration_ms)
+            result = fn(*args, **kwargs)
+            duration = (time.time() - start) * 1000
+            if tele:
+                log_success(duration)
             return result
-        except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000.0
-            _record_metrics_and_logs_error(e, duration_ms)
+
+        except Exception as exc:
+            duration = (time.time() - start) * 1000
+            if tele:
+                log_error(exc, duration)
             raise
 
-    # propagate telemetry instance binding if present
-    wrapper._telemetry = getattr(func, "_telemetry", None)
+    wrapper._telemetry = getattr(fn, "_telemetry", None)
     return wrapper
 
 
+# =====================================================================
+#  CLASS WRAPPER FOR DYNAMIC INSTRUMENTATION
+# =====================================================================
 class FunctionInstrumentor:
-    """
-    Small helper to instrument functions dynamically.
-
-    Usage:
-        fi = FunctionInstrumentor()
-        my_func = fi.instrument(my_func)
-    """
 
     def __init__(self):
-        self._wrapped: Dict[Any, Any] = {}
+        self._wrapped = {}
 
     def instrument(self, func, name: Optional[str] = None):
         wrapped = instrument_function(func, name)
@@ -274,10 +209,18 @@ class FunctionInstrumentor:
         return wrapped
 
     def get_wrapped(self, func):
-        """
-        Return wrapped function if previously instrumented.
-        """
         return self._wrapped.get(func)
+
+
+
+# =====================================================================
+#  SIMPLE USER-FACING DECORATOR
+# =====================================================================
+def instrument(fn=None, *, name: Optional[str] = None):
+    """Clean decorator for user code."""
+    if fn is None:
+        return lambda f: instrument_function(f, name)
+    return instrument_function(fn, name)
 
 
 
