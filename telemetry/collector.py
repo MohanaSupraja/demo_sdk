@@ -94,13 +94,10 @@ class TelemetryCollector:
             try:
                 from opentelemetry.instrumentation.logging import LoggingInstrumentor
                 LoggingInstrumentor().instrument(set_logging_format=True,excluded_loggers=[
-                "werkzeug",
+                "werkzeug",            # Flask HTTP logs
                 "werkzeug._internal",
-                "gunicorn.error",
-                "gunicorn.access",
-                "uvicorn",
-                "uvicorn.error",
-                "uvicorn.access",
+                "gunicorn.access",     # normal request logs
+                "uvicorn.access",   
                 ])
                 self._enable_python_auto_log_capture()
                 logger.debug("Python auto log capture enabled.")
