@@ -14,24 +14,40 @@ logger = logging.getLogger(__name__)
 def _bind_telemetry(wrapper, fn, dec=None):
     """
     Ensures telemetry always propagates through ALL decorator layers.
+    This fixes the issue where decorated functions were not receiving telemetry.
     """
-    # 1️⃣ Copy telemetry from the original function (if instrumented by class/function instrumentation)
+
+    tele = None
+
+    # 1️⃣ Telemetry already on the function (instrument_function)
     if hasattr(fn, "_telemetry") and fn._telemetry is not None:
-        wrapper._telemetry = fn._telemetry
+        tele = fn._telemetry
 
-    # 2️⃣ Or from the decorator factory (create_decorators binds telemetry here)
+    # 2️⃣ Telemetry available from the decorator factory
     elif dec is not None and hasattr(dec, "_telemetry"):
-        wrapper._telemetry = dec._telemetry
+        tele = dec._telemetry
 
-    # 3️⃣ Or from nested decorator wrapped functions
+    # 3️⃣ Telemetry on nested wrapper functions (__wrapped__)
     elif hasattr(fn, "__wrapped__") and hasattr(fn.__wrapped__, "_telemetry"):
-        wrapper._telemetry = fn.__wrapped__._telemetry
+        tele = fn.__wrapped__._telemetry
 
-    else:
-        wrapper._telemetry = None
+    # Attach telemetry to THIS wrapper
+    wrapper._telemetry = tele
+
+    # -------------------------------------------------------
+    #  FIX: push telemetry to ALL layers below this wrapper
+    # -------------------------------------------------------
+    if tele:
+        # Assign on the direct function
+        setattr(fn, "_telemetry", tele)
+
+        # Deep-propagate telemetry down the decorator chain
+        cur = fn
+        while hasattr(cur, "__wrapped__"):
+            cur = cur.__wrapped__
+            setattr(cur, "_telemetry", tele)
 
     return wrapper
-
 
 # ======================================================================
 #  TELEMETRY RESOLUTION (used for bound methods, functions, nested decorators)
