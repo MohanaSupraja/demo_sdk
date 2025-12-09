@@ -205,17 +205,16 @@ class FunctionInstrumentor:
 
     def instrument(self, func, name: Optional[str] = None):
         wrapped = instrument_function(func, name)
-        self._wrapped[func] = wrapped
+        wrapped._telemetry = None   # allow TelemetryCollector to override
         return wrapped
+
 
     def get_wrapped(self, func):
         return self._wrapped.get(func)
 
 
 
-# =====================================================================
 #  SIMPLE USER-FACING DECORATOR
-# =====================================================================
 def instrument(fn=None, *, name: Optional[str] = None):
     """Clean decorator for user code."""
     if fn is None:

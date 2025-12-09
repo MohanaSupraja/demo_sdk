@@ -196,9 +196,16 @@ class TelemetryCollector:
 
     def instrument_class(self, cls, prefix=None):
         return self._class_instrumentor.instrument(cls, self, prefix)
+    
 
     def instrument_function(self, func, name: str = None):
-        return self._func_instrumentor.instrument(func, name)
+        if getattr(func, "__wrapped_by_sdk__", False):
+            return func
+        wrapped = self._func_instrumentor.instrument(func, name)
+        wrapped._telemetry = self
+        setattr(wrapped, "__wrapped_by_sdk__", True)
+        return wrapped
+
 
     # ---------------- CONTEXT ----------------
     def inject_context(self, carrier: Dict[str, str], context=None):
