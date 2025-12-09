@@ -54,7 +54,7 @@ class LogsManager:
                 self.otel_logger_provider = logger_provider
             else:
                 self.otel_logger_provider = LoggerProvider()
-                # 🔴 IMPORTANT: register as global provider so LoggingInstrumentor + others can use it
+                #  IMPORTANT: register as global provider so LoggingInstrumentor + others can use it
                 set_logger_provider(self.otel_logger_provider)
 
             use_http = (config.protocol or "").startswith("http")

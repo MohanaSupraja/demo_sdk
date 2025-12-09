@@ -24,17 +24,15 @@ class TelemetryConfig:
     headers: Dict[str, str] = field(default_factory=dict)
     insecure: bool = True                    # Only for gRPC
 
-    # -------------------------------------------------------------
+   
     # FEATURE FLAGS
-    # -------------------------------------------------------------
-    enable_traces: bool = True
-    enable_metrics: bool = True
-    enable_logs: bool = True
+    enable_traces: bool = False
+    enable_metrics: bool = False
+    enable_logs: bool = False
 
-    # -------------------------------------------------------------
     # AUTO-INSTRUMENTATION CONTROL
-    # -------------------------------------------------------------
     auto_instrument: bool = False
+
 
     # Framework (Flask, FastAPI, Django)
     instrument_frameworks: bool = True

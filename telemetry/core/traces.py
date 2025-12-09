@@ -171,8 +171,14 @@ class TracesManager:
 
         try:
             span.record_exception(exception)
-            if Status and StatusCode:
-                span.set_status(Status(StatusCode.ERROR))
+
+            # If Status class exists (older OTel)
+            if Status is not None:
+                span.set_status(Status(StatusCode.ERROR, str(exception)))
+            else:
+                # New OTel versions accept StatusCode directly
+                span.set_status(StatusCode.ERROR)
+
         except Exception:
             pass
 

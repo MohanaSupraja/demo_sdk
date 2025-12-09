@@ -90,7 +90,7 @@ class TelemetryCollector:
         #     ✔ Injects trace_id/span_id
         #     ✔ Sends to OTEL → Collector → Loki
         # --------------------------------------------------------
-        if self.config.enable_logs:
+        if self.config.enable_logs and self.config.auto_instrument:
             try:
                 from opentelemetry.instrumentation.logging import LoggingInstrumentor
                 LoggingInstrumentor().instrument(set_logging_format=True)
@@ -100,7 +100,7 @@ class TelemetryCollector:
                 logger.debug("Python logging auto-instrumentation failed", exc_info=True)
 
     # --------------------------------------------------------
-    # 🔥 NEW METHOD: EXPORT NORMAL PYTHON LOGS → OTEL → LOKI
+    #  NEW METHOD: EXPORT NORMAL PYTHON LOGS → OTEL → LOKI
     # --------------------------------------------------------
     def _enable_python_auto_log_capture(self):
         import logging
@@ -226,9 +226,9 @@ class TelemetryCollector:
             pass
         return True
 
-    def is_enabled(self) -> bool:
-        return bool(
-            self.config.enable_traces
-            or self.config.enable_metrics
-            or self.config.enable_logs
-        )
+    # def is_enabled(self) -> bool:
+    #     return bool(
+    #         self.config.enable_traces
+    #         or self.config.enable_metrics
+    #         or self.config.enable_logs
+    #     )
