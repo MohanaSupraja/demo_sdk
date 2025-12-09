@@ -7,7 +7,7 @@ import os
 class TelemetryConfig:
     """
     Central configuration object for the entire Observability SDK.
-    Fully production-ready.
+    Handles both manual + auto-instrumentation cleanly.
     """
 
     # -------------------------------------------------------------
@@ -20,9 +20,9 @@ class TelemetryConfig:
     # OTLP EXPORTER SETTINGS
     # -------------------------------------------------------------
     collector_endpoint: Optional[str] = None
-    protocol: str = "http/protobuf"   # {"http/protobuf", "grpc"}
+    protocol: str = "http/protobuf"         # {"http/protobuf", "grpc"}
     headers: Dict[str, str] = field(default_factory=dict)
-    insecure: bool = True             # For gRPC only
+    insecure: bool = True                    # Only for gRPC
 
     # -------------------------------------------------------------
     # FEATURE FLAGS
@@ -32,25 +32,31 @@ class TelemetryConfig:
     enable_logs: bool = True
 
     # -------------------------------------------------------------
-    # AUTO-INSTRUMENTATION CONFIG
+    # AUTO-INSTRUMENTATION CONTROL
     # -------------------------------------------------------------
     auto_instrument: bool = False
-    instrument_frameworks: bool = True
 
+    # Framework (Flask, FastAPI, Django)
+    instrument_frameworks: bool = True
     framework_app: Any = None
 
+    # Library instrumentation (requests, urllib3, httpx)
+    instrument_libraries_enabled: bool = True
     instrument_libraries: List[str] = field(
         default_factory=lambda: ["requests", "urllib3", "httpx"]
     )
 
+    # Database instrumentation
+    instrument_databases_enabled: bool = True
     instrument_databases: List[str] = field(
         default_factory=lambda: ["sqlalchemy", "psycopg2", "pymysql", "redis", "pymongo"]
     )
 
+    # Instrument this SDK itself
     instrument_sify_sdk: bool = False
 
     # -------------------------------------------------------------
-    # SAMPLING + BATCH EXPORT
+    # SAMPLING + BATCH EXPORT SETTINGS
     # -------------------------------------------------------------
     sampling_rate: float = 1.0
     export_interval_ms: int = 5000
@@ -65,6 +71,9 @@ class TelemetryConfig:
     capture_request_body: bool = False
     capture_response_body: bool = False
     capture_sql_queries: bool = True
+
+    # Logs sampling
+    log_sample_rate: float = 1.0
 
     # -------------------------------------------------------------
     # DATA MASKING
@@ -83,7 +92,7 @@ class TelemetryConfig:
         return asdict(self)
 
     # -------------------------------------------------------------
-    # ENVIRONMENT VARIABLE LOADER
+    # LOAD FROM ENVIRONMENT
     # -------------------------------------------------------------
     @staticmethod
     def from_env() -> "TelemetryConfig":
@@ -108,18 +117,20 @@ class TelemetryConfig:
             enable_logs=get_bool("SIFY_ENABLE_LOGS", True),
 
             auto_instrument=get_bool("SIFY_AUTO_INSTRUMENT", False),
+
             instrument_frameworks=get_bool("SIFY_INSTRUMENT_FRAMEWORKS", True),
 
+            instrument_libraries_enabled=get_bool("SIFY_INSTRUMENT_LIBRARIES_ENABLED", True),
+            instrument_databases_enabled=get_bool("SIFY_INSTRUMENT_DATABASES_ENABLED", True),
+
             instrument_libraries=(
-                os.environ.get("SIFY_INSTRUMENT_LIBRARIES", "")
-                .split(",")
+                os.environ.get("SIFY_INSTRUMENT_LIBRARIES", "").split(",")
                 if os.environ.get("SIFY_INSTRUMENT_LIBRARIES")
                 else ["requests", "urllib3", "httpx"]
             ),
 
             instrument_databases=(
-                os.environ.get("SIFY_INSTRUMENT_DATABASES", "")
-                .split(",")
+                os.environ.get("SIFY_INSTRUMENT_DATABASES", "").split(",")
                 if os.environ.get("SIFY_INSTRUMENT_DATABASES")
                 else ["sqlalchemy", "psycopg2", "pymysql", "redis", "pymongo"]
             ),
@@ -128,6 +139,7 @@ class TelemetryConfig:
 
             sampling_rate=float(os.environ.get("SIFY_SAMPLING_RATE", "1.0")),
             export_interval_ms=int(os.environ.get("SIFY_EXPORT_INTERVAL_MS", "5000")),
+            log_sample_rate=float(os.environ.get("SIFY_LOG_SAMPLE_RATE", "1.0")),
         )
 
         # Normalize HTTP endpoint
@@ -136,7 +148,6 @@ class TelemetryConfig:
                 "/v1/traces", "/v1/metrics", "/v1/logs",
                 "/v1/traces/", "/v1/metrics/", "/v1/logs/"
             ]
-
             for suf in REMOVE_SUFFIXES:
                 if cfg.collector_endpoint.endswith(suf):
                     cfg.collector_endpoint = cfg.collector_endpoint[:-len(suf)]
@@ -144,7 +155,7 @@ class TelemetryConfig:
 
             cfg.collector_endpoint = cfg.collector_endpoint.rstrip("/")
 
-        # Add service name into resource attrs
+        # Always attach service name to resources
         cfg.resource_attributes["service.name"] = cfg.service_name
 
         return cfg

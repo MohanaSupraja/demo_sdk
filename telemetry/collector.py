@@ -57,24 +57,33 @@ class TelemetryCollector:
         # --------------------------------------------------------
         # 2️⃣ Auto-instrument Libraries (requests, httpx, urllib3)
         # --------------------------------------------------------
-        if self.config.auto_instrument and self.config.instrument_libraries:
+
+        if (
+            self.config.auto_instrument
+            and self.config.instrument_libraries_enabled
+            and self.config.instrument_libraries
+        ):
+            logger.debug(f"Auto-instrumenting libraries: {self.config.instrument_libraries}")
             try:
                 results = self._lib_instrumentor.instrument(self.config.instrument_libraries)
                 self._instrumented_libraries.update(self.config.instrument_libraries)
             except Exception:
                 logger.debug("Library auto-instrumentation failed", exc_info=True)
 
+
         # --------------------------------------------------------
         # 3️⃣ Auto-instrument Databases
         # --------------------------------------------------------
-        if self.config.auto_instrument:
-            db_libs = getattr(self.config, "instrument_databases", [])
-            if db_libs:
-                try:
-                    self._db_instrumentor.instrument(db_libs)
-                except Exception:
-                    logger.debug("DB instrumentation failed", exc_info=True)
-
+        if (
+            self.config.auto_instrument
+            and self.config.instrument_databases_enabled
+            and self.config.instrument_databases
+        ):
+            logger.debug(f"Auto-instrumenting DB clients: {self.config.instrument_databases}")
+            try:
+                self._db_instrumentor.instrument(self.config.instrument_databases)
+            except Exception:
+                logger.debug("Database instrumentation failed", exc_info=True)
         # --------------------------------------------------------
         # 4️⃣ Auto-instrument Python logging → Loki
         #     ✔ Captures ALL Python logs
