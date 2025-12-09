@@ -37,46 +37,88 @@ class TracesManager:
 
         try:
             if trace:
+                # If a provider is given, set it **only if** no global provider exists yet.
                 if tracer_provider is not None:
-                    # Ensure OTel global provider is set
-                    trace.set_tracer_provider(tracer_provider)
+                    try:
+                        current = trace.get_tracer_provider()
+                        # Some SDKs expose a "ProxyTracerProvider" before real init;
+                        # we only override if they look like the default no-op.
+                        if type(current).__name__.lower().startswith("default") or \
+                           type(current).__name__.lower().startswith("proxy"):
+                            trace.set_tracer_provider(tracer_provider)
+                    except Exception:
+                        # Best effort; if this fails we just continue.
+                        trace.set_tracer_provider(tracer_provider)
 
                 # ALWAYS create tracer via global provider
                 self.tracer = trace.get_tracer(__name__)
         except Exception:
             self.tracer = None
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Internal helper: pick a safe SpanKind
+    # ------------------------------------------------------------------
+    def _normalize_kind(self, kind):
+        """
+        Ensure we never pass `kind=None` to OTel (that caused KeyError: None).
+        Defaults to INTERNAL when SpanKind is available.
+        """
+        if kind is not None:
+            return kind
+        if SpanKind is not None:
+            return SpanKind.INTERNAL
+        return None
+
+    # ------------------------------------------------------------------
     # Start span (context manager)
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     @contextmanager
     def start_span(self, name: str, attributes: Dict[str, Any] = None, kind=None):
-        if self.tracer:
-            with self.tracer.start_as_current_span(
-                name,
-                attributes=attributes,
-                kind=kind,
-            ) as span:
-                yield span
-        else:
-            yield DummySpan()
+        kind = self._normalize_kind(kind)
 
-    # ----------------------------------------------------------------------
-    # Start span manually as context manager
-    # ----------------------------------------------------------------------
-    def start_span_as_current(self, name: str, attributes: Dict[str, Any] = None, kind=None):
         if self.tracer:
-            return self.tracer.start_as_current_span(name, attributes=attributes, kind=kind)
+            try:
+                with self.tracer.start_as_current_span(
+                    name,
+                    attributes=attributes,
+                    kind=kind,
+                ) as span:
+                    yield span
+                return
+            except Exception:
+                # fall through to DummySpan
+                pass
+
+        # Fallback path
+        yield DummySpan()
+
+    # ------------------------------------------------------------------
+    # Start span manually as context manager
+    # ------------------------------------------------------------------
+    def start_span_as_current(self, name: str, attributes: Dict[str, Any] = None, kind=None):
+        kind = self._normalize_kind(kind)
+
+        if self.tracer:
+            try:
+                return self.tracer.start_as_current_span(
+                    name,
+                    attributes=attributes,
+                    kind=kind,
+                )
+            except Exception:
+                pass
 
         class DummyCM:
             def __enter__(self): return DummySpan()
             def __exit__(self, *a): return False
         return DummyCM()
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Create a span manually (not context managed)
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def create_span(self, name: str, attributes: Dict[str, Any] = None, kind=None):
+        kind = self._normalize_kind(kind)
+
         if self.tracer:
             try:
                 return self.tracer.start_span(name, attributes=attributes, kind=kind)
@@ -84,9 +126,9 @@ class TracesManager:
                 return DummySpan()
         return DummySpan()
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # End span safely
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def end_span(self, span):
         try:
             if span and hasattr(span, "end"):
@@ -94,9 +136,9 @@ class TracesManager:
         except Exception:
             pass
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Add event to current span
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def add_event(self, name: str, attributes: Dict[str, Any] = None):
         span = self.get_current_span()
         try:
@@ -105,9 +147,9 @@ class TracesManager:
         except Exception:
             pass
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Bulk attribute update
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def update_attributes(self, attributes: Dict[str, Any]):
         span = self.get_current_span()
         if not span:
@@ -119,9 +161,9 @@ class TracesManager:
         except Exception:
             pass
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Record exception on span
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def record_exception(self, exception: Exception):
         span = self.get_current_span()
         if not span:
@@ -129,35 +171,36 @@ class TracesManager:
 
         try:
             span.record_exception(exception)
-            span.set_status(Status(StatusCode.ERROR))
+            if Status and StatusCode:
+                span.set_status(Status(StatusCode.ERROR))
         except Exception:
             pass
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Set status OK
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def set_span_status_ok(self):
         span = self.get_current_span()
         try:
-            if span:
+            if span and Status and StatusCode:
                 span.set_status(Status(StatusCode.OK))
         except Exception:
             pass
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Set status ERROR
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def set_span_status_error(self, message="error"):
         span = self.get_current_span()
         try:
-            if span:
+            if span and Status and StatusCode:
                 span.set_status(Status(StatusCode.ERROR, message))
         except Exception:
             pass
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Get active span
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def get_current_span(self):
         try:
             if trace:
@@ -166,9 +209,9 @@ class TracesManager:
             return DummySpan()
         return DummySpan()
 
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Return trace_id and span_id
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def get_trace_context(self) -> Dict[str, Optional[str]]:
         try:
             span = self.get_current_span()
@@ -183,6 +226,7 @@ class TracesManager:
             }
         except Exception:
             return {}
+
 
 
 

@@ -30,7 +30,7 @@ class TelemetryCollector:
         # Managers
         self._traces = TracesManager(self.tracer_provider)
         self._metrics = MetricsManager(self.meter_provider)
-        self._logs = LogsManager(self.config, self.logger_provider)
+        self._logs = LogsManager(self.config, logger_provider=self.logger_provider)
 
         # Instrumentors
         self._lib_instrumentor = LibraryInstrumentor()
@@ -103,23 +103,18 @@ class TelemetryCollector:
     # 🔥 NEW METHOD: EXPORT NORMAL PYTHON LOGS → OTEL → LOKI
     # --------------------------------------------------------
     def _enable_python_auto_log_capture(self):
-        """
-        Automatically capture ALL logs created with `logging` module
-        and route them through OpenTelemetry Log pipeline.
-        """
         import logging
-        from opentelemetry._logs import set_logger_provider
         from opentelemetry.trace import get_current_span
 
         provider = self._logs.otel_logger_provider
-        set_logger_provider(provider)
+
+        # DO NOT CALL set_logger_provider(provider) HERE ❌
 
         otel_logger = provider.get_logger(self.config.service_name)
 
         class OTelLoggingHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord):
+            def emit(self, record):
                 try:
-                    # Inject trace context
                     span_ctx = get_current_span().get_span_context()
                     trace_attrs = {}
 
@@ -129,7 +124,6 @@ class TelemetryCollector:
                             "span_id": f"{span_ctx.span_id:016x}",
                         }
 
-                    # Push log into OTEL pipeline
                     otel_logger.emit(
                         body=record.getMessage(),
                         severity_text=record.levelname,
@@ -142,7 +136,7 @@ class TelemetryCollector:
                         },
                     )
                 except Exception:
-                    pass  # important: never break app logging
+                    pass
 
         root = logging.getLogger()
         root.addHandler(OTelLoggingHandler())
