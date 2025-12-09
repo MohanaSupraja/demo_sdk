@@ -42,6 +42,17 @@ def instrument_function(fn, name: Optional[str] = None):
     def wrapper(*args, **kwargs):
 
         tele = _resolve_telemetry(args[0] if args else None, fn)
+        try:
+            logger.debug("INSTRUMENT_WRAPPER start: fn=%s span_name=%s", fn.__name__, span_name)
+            # Also print, in case logging not configured
+            print(f"[SDK DEBUG] wrapper entered for {span_name}; tele={tele}")
+            has_metrics = getattr(tele, "metrics", None) is not None
+            has_logs = getattr(tele, "logs", None) is not None
+            has_traces = bool(getattr(tele, "traces", None) and getattr(tele.traces, "tracer", None))
+            logger.debug("tele resolved: has_metrics=%s has_logs=%s has_traces=%s", has_metrics, has_logs, has_traces)
+            print(f"[SDK DEBUG] has_metrics={has_metrics} has_logs={has_logs} has_traces={has_traces}")
+        except Exception:
+            logger.exception("debug print failed in wrapper")
 
         start = time.time()
 
@@ -54,11 +65,16 @@ def instrument_function(fn, name: Optional[str] = None):
         # INTERNAL HELPERS
         # --------------------------
         def log_success(duration):
-            if not tele: return
+            print(f"[SDK DEBUG] log_success called for {span_name} duration={duration}")
+            logger.debug("log_success called for %s duration=%s", span_name, duration)
+            if not tele:
+                print("[SDK DEBUG] NO tele, skipping metrics/logs")
+                return
 
             # METRIC COUNTER
             try:
                 if tele.metrics:
+                    print("[SDK DEBUG] calling tele.metrics.increment_counter")
                     tele.metrics.increment_counter(counter_name, 1, {
                         **base_attrs,
                         "outcome": "success"
