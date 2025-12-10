@@ -1,3 +1,6 @@
+# ============================================================
+# Unified Class Instrumentation
+# ============================================================
 import inspect
 import functools
 import logging
@@ -9,12 +12,11 @@ logger = logging.getLogger(__name__)
 
 def instrument_class(cls, telemetry, prefix=None):
     """
-    Automatically instruments all PUBLIC methods of a class.
-    Adds:
-        ✓ Traces
-        ✓ Logs
-        ✓ Counters
-        ✓ Histograms (NEW)
+    Unified class instrumentation:
+        ✓ Same span template as function instrumentation
+        ✓ Same metrics (calls, duration_ms)
+        ✓ Same logs (structured success/error)
+        ✓ Same attributes
     """
 
     class_name = cls.__name__
@@ -22,26 +24,25 @@ def instrument_class(cls, telemetry, prefix=None):
     for name, method in inspect.getmembers(cls, inspect.isfunction):
 
         if name.startswith("_"):
-            continue  # Skip private/dunder
+            continue  # skip private / dunder
 
         original = getattr(cls, name)
 
-        span_name = (
-            f"{prefix}.{class_name}.{name}"
-            if prefix else f"{class_name}.{name}"
-        )
+        # Unified span name
+        qualified_name = f"{class_name}.{name}"
+        span_name = f"telemetry.class.{qualified_name}"
 
-        counter_name = f"{class_name}.{name}.calls"
-        histogram_name = f"{class_name}.{name}.duration_ms"
+        # Unified metrics
+        counter_name = f"telemetry.class.{qualified_name}.calls"
+        histogram_name = f"telemetry.class.{qualified_name}.duration_ms"
 
-        # IMPORTANT: Freeze loop variables
         def make_wrapper(orig_fn, span_name, method_name=name):
             @functools.wraps(orig_fn)
             def wrapper(*args, **kwargs):
 
                 tele = getattr(orig_fn, "_telemetry", telemetry)
 
-                # Telemetry missing → run normally
+                # No telemetry → run normally
                 if tele is None or not getattr(tele, "traces", None):
                     return orig_fn(*args, **kwargs)
 
@@ -50,62 +51,62 @@ def instrument_class(cls, telemetry, prefix=None):
                 start = time.time()
 
                 try:
-                    with tracer.start_as_current_span(span_name) as s:
-                        span = s
-                        duration_ms = None
+                    with tracer.start_as_current_span(span_name) as span:
 
-                        # Log Start
-                        try:
-                            tele.logs.debug(
-                                f"{span_name} started",
-                                {"class": class_name, "method": method_name}
-                            )
-                        except Exception:
-                            pass
+                        # Unified attributes
+                        span.set_attribute("code.function", method_name)
+                        span.set_attribute("code.class", class_name)
+                        span.set_attribute("code.module", orig_fn.__module__)
+                        span.set_attribute("telemetry.kind", "class")
+                        span.set_attribute("telemetry.sdk", "custom-python-sdk")
 
                         result = orig_fn(*args, **kwargs)
 
-                        # Compute duration
-                        duration_ms = (time.time() - start) * 1000
+                        duration = (time.time() - start) * 1000
+                        span.set_attribute("duration_ms", duration)
 
-                        # Histogram (NEW)
+                        # Metrics
                         try:
-                            tele.metrics.record_histogram(
-                                histogram_name, duration_ms,
+                            tele.metrics.increment_counter(
+                                counter_name, 1,
                                 {
                                     "class": class_name,
-                                    "method": method_name,
+                                    "function": method_name,
+                                    "outcome": "success",
+                                }
+                            )
+
+                            tele.metrics.record_histogram(
+                                histogram_name, duration,
+                                {
+                                    "class": class_name,
+                                    "function": method_name,
                                     "outcome": "success",
                                 }
                             )
                         except Exception:
-                            pass
+                            logger.debug("Metric success error", exc_info=True)
 
-                        # Logs + Counter
+                        # Logs
                         try:
                             tele.logs.info(
-                                f"{span_name} executed successfully",
+                                f"{qualified_name} executed successfully",
                                 {
                                     "class": class_name,
-                                    "method": method_name,
-                                    "duration_ms": duration_ms,
+                                    "function": method_name,
+                                    "duration_ms": duration,
                                     "outcome": "success",
+                                    "telemetry.kind": "class"
                                 }
                             )
-
-                            tele.metrics.increment_counter(
-                                counter_name,
-                                1,
-                                {"outcome": "success"}
-                            )
                         except Exception:
-                            pass
+                            logger.debug("Log success failed", exc_info=True)
 
                         return result
 
                 except Exception as e:
 
-                    duration_ms = (time.time() - start) * 1000
+                    duration = (time.time() - start) * 1000
 
                     # Trace error
                     try:
@@ -115,49 +116,53 @@ def instrument_class(cls, telemetry, prefix=None):
                     except Exception:
                         pass
 
-                    # Error histogram (NEW)
+                    # Error metrics
                     try:
-                        tele.metrics.record_histogram(
-                            histogram_name, duration_ms,
+                        tele.metrics.increment_counter(
+                            counter_name, 1,
                             {
                                 "class": class_name,
-                                "method": method_name,
+                                "function": method_name,
+                                "outcome": "error",
+                                "exception.type": type(e).__name__,
+                            }
+                        )
+                        tele.metrics.record_histogram(
+                            histogram_name, duration,
+                            {
+                                "class": class_name,
+                                "function": method_name,
                                 "outcome": "error",
                                 "exception.type": type(e).__name__,
                             }
                         )
                     except Exception:
-                        pass
+                        logger.debug("Metric error failed", exc_info=True)
 
-                    # Error logs + Counter
+                    # Error logs
                     try:
                         tele.logs.error(
-                            f"{span_name} failed",
+                            f"Error in {qualified_name}",
                             {
-                                "error": str(e),
                                 "class": class_name,
-                                "method": method_name,
-                                "duration_ms": duration_ms,
-                                "outcome": "error",
-                            }
-                        )
-
-                        tele.metrics.increment_counter(
-                            counter_name,
-                            1,
-                            {
+                                "function": method_name,
+                                "duration_ms": duration,
                                 "outcome": "error",
                                 "exception.type": type(e).__name__,
+                                "exception.message": str(e),
                             }
                         )
                     except Exception:
-                        pass
+                        logger.debug("Log error failed", exc_info=True)
 
                     raise
 
+            # Allow TelemetryCollector to override later
             wrapper._telemetry = telemetry
+
             return wrapper
 
+        # Replace original method
         setattr(cls, name, make_wrapper(original, span_name))
 
     logger.info(f"Class '{cls.__name__}' instrumented successfully")
@@ -167,7 +172,6 @@ def instrument_class(cls, telemetry, prefix=None):
 class ClassInstrumentor:
     def instrument(self, cls, telemetry, prefix=None):
         return instrument_class(cls, telemetry, prefix)
-
 
 
 
