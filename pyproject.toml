@@ -46,7 +46,8 @@ auto = [
   "opentelemetry-instrumentation-sqlalchemy==0.59b0",
   "opentelemetry-instrumentation-logging==0.59b0",
   "opentelemetry-instrumentation-redis==0.59b0",
-  "opentelemetry-instrumentation-wsgi==0.59b0"
+  "opentelemetry-instrumentation-wsgi==0.59b0",
+  "opentelemetry-instrumentation-pymongo==0.59b0"
 ]
 
 [tool.setuptools.packages.find]
