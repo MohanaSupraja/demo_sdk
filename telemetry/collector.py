@@ -200,13 +200,13 @@ class TelemetryCollector:
 
     def instrument_function(self, func, name: str = None):
 
-        print("🔵 [Collector.instrument_function] Called", flush=True)
+        print(" [Collector.instrument_function] Called", flush=True)
         print(f"    ➤ func original: {func} (id={id(func)})", flush=True)
         print(f"    ➤ func name: {func.__name__}", flush=True)
 
         # Avoid double wrapping
         if getattr(func, "__wrapped_by_sdk__", False):
-            print("    ⚠️ Function already wrapped, returning existing wrapper", flush=True)
+            print("     Function already wrapped, returning existing wrapper", flush=True)
             return func
 
         # Ask FunctionInstrumentor to wrap the function
@@ -218,19 +218,19 @@ class TelemetryCollector:
         wrapped._telemetry = self
         wrapped.__wrapped_by_sdk__ = True
 
-        print(f"    🔧 Attached TelemetryCollector to wrapper _telemetry={wrapped._telemetry}", flush=True)
+        print(f"     Attached TelemetryCollector to wrapper _telemetry={wrapped._telemetry}", flush=True)
 
         # EXTRA DEBUG - Check mapping
         try:
             instrumentor_map = self._func_instrumentor._wrapped
             if func in instrumentor_map:
-                print(f"    🗂 Mapping found: {func} → {instrumentor_map[func]}", flush=True)
+                print(f"    Mapping found: {func} → {instrumentor_map[func]}", flush=True)
             else:
-                print("    ❌ Mapping NOT found inside FunctionInstrumentor!", flush=True)
+                print("     Mapping NOT found inside FunctionInstrumentor!", flush=True)
         except Exception as e:
-            print(f"    ❌ Failed to inspect FunctionInstrumentor mapping: {e}", flush=True)
+            print(f"     Failed to inspect FunctionInstrumentor mapping: {e}", flush=True)
 
-        print("🔵 [Collector.instrument_function] DONE\n", flush=True)
+        print(" [Collector.instrument_function] DONE\n", flush=True)
 
         return wrapped
 
