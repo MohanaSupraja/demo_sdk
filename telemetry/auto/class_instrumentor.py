@@ -8,64 +8,61 @@ logger = logging.getLogger(__name__)
 
 def instrument_class(cls, telemetry, prefix=None):
     """
-    - Wraps ALL public methods (no privates)
-    - Adds traces, metrics, logs
-    - Safe fallbacks: never breaks user code
-    - Automatically correlates logs with traces
+    Automatically instruments all public methods of a class:
+    ✓ Traces
+    ✓ Logs
+    ✓ Metrics
     """
 
     class_name = cls.__name__
 
     for name, method in inspect.getmembers(cls, inspect.isfunction):
 
-        if name.startswith("_"):   # Skip private, dunder, internal methods
-            continue
+        if name.startswith("_"):
+            continue  # Skip private/dunder methods
 
         original = getattr(cls, name)
         span_name = f"{prefix}.{class_name}.{name}" if prefix else f"{class_name}.{name}"
 
-        def make_wrapper(orig_fn, span_name):
+        # IMPORTANT FIX: freeze loop variables
+        def make_wrapper(orig_fn, span_name, method_name=name):
             @functools.wraps(orig_fn)
             def wrapper(*args, **kwargs):
 
-                # Resolve telemetry instance
+                # Resolve telemetry
                 tele = getattr(orig_fn, "_telemetry", telemetry)
 
-                # --------------------------
-                # Case 1: No telemetry at all
-                # --------------------------
+                # No telemetry -> call original
                 if tele is None or not getattr(tele, "traces", None):
                     return orig_fn(*args, **kwargs)
 
                 tracer = tele.traces.tracer
                 span = None
 
-                # --------------------------
-                # Execute method with tracing
-                # --------------------------
                 try:
                     with tracer.start_as_current_span(span_name) as s:
                         span = s
 
-                        # Log start
+                        # ----- LOG: START -----
                         try:
                             tele.logs.debug(
                                 f"{span_name} started",
-                                {"class": class_name, "method": name},
+                                {"class": class_name, "method": method_name},
                             )
                         except Exception:
                             pass
 
                         result = orig_fn(*args, **kwargs)
 
-                        # Logs + metrics on success
+                        # ----- LOG + METRIC: SUCCESS -----
                         try:
                             tele.logs.info(
                                 f"{span_name} executed successfully",
-                                {"class": class_name, "method": name, "outcome": "success"},
+                                {"class": class_name, "method": method_name, "outcome": "success"},
                             )
+
                             tele.metrics.increment_counter(
-                                f"{class_name}.{name}.calls",
+                                f"{class_name}.{method_name}.calls",
                                 1,
                                 {"outcome": "success"},
                             )
@@ -88,26 +85,33 @@ def instrument_class(cls, telemetry, prefix=None):
                     try:
                         tele.logs.error(
                             f"{span_name} failed",
-                            {"error": str(e), "class": class_name, "method": name},
+                            {
+                                "error": str(e),
+                                "class": class_name,
+                                "method": method_name,
+                                "outcome": "failure",
+                            },
                         )
                     except Exception:
                         pass
 
-                    # Metrics for failure
+                    # Metrics
                     try:
                         tele.metrics.increment_counter(
-                            f"{class_name}.{name}.calls",
+                            f"{class_name}.{method_name}.calls",
                             1,
                             {"outcome": "failure"},
                         )
                     except Exception:
                         pass
 
-                    raise  # re-throw to keep user logic intact
+                    raise
 
+            # Attach telemetry to wrapper
             wrapper._telemetry = telemetry
             return wrapper
 
+        # Replace class method with wrapper
         setattr(cls, name, make_wrapper(original, span_name))
 
     logger.info(f"Class '{cls.__name__}' instrumented successfully")
@@ -117,9 +121,6 @@ def instrument_class(cls, telemetry, prefix=None):
 class ClassInstrumentor:
     def instrument(self, cls, telemetry, prefix=None):
         return instrument_class(cls, telemetry, prefix)
-
-
-
 
 
 

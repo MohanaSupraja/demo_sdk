@@ -38,7 +38,7 @@ def instrument_function(fn, name: Optional[str] = None):
         if tele is None:
             tele = _resolve_telemetry(args[0] if args else None, fn)
 
-        print(f"🟢 [WRAPPER ENTER] {span_name}", flush=True)
+        print(f" [WRAPPER ENTER] {span_name}", flush=True)
         print(f"    wrapper_id={id(wrapper)} fn_id={id(fn)}", flush=True)
         print(f"    wrapper._telemetry={wrapper._telemetry}", flush=True)
         print(f"    tele_resolved={tele}", flush=True)
@@ -60,7 +60,7 @@ def instrument_function(fn, name: Optional[str] = None):
         # INTERNAL HELPERS
         # --------------------------
         def log_success(duration):
-            print(f"🟢 [SUCCESS] {span_name} duration={duration}", flush=True)
+            print(f" [SUCCESS] {span_name} duration={duration}", flush=True)
 
             if not tele:
                 print("    NO tele – skipping metrics/logs")
@@ -89,7 +89,7 @@ def instrument_function(fn, name: Optional[str] = None):
                 logger.debug("Log success failed", exc_info=True)
 
         def log_error(exc, duration):
-            print(f"🔴 [ERROR] {span_name}: {exc}", flush=True)
+            print(f" [ERROR] {span_name}: {exc}", flush=True)
 
             if not tele:
                 return
@@ -206,11 +206,11 @@ class FunctionInstrumentor:
 
     def __init__(self):
         self._wrapped = {}
-        print("🔧 FunctionInstrumentor initialized", flush=True)
+        print(" FunctionInstrumentor initialized", flush=True)
 
     def instrument(self, func, name: Optional[str] = None):
 
-        print("\n🔧 [FunctionInstrumentor.instrument] called", flush=True)
+        print("\n [FunctionInstrumentor.instrument] called", flush=True)
         print(f"   ➤ original_func={func} id={id(func)}", flush=True)
 
         wrapped = instrument_function(func, name)
@@ -219,11 +219,11 @@ class FunctionInstrumentor:
 
         # Allow TelemetryCollector to override
         wrapped._telemetry = getattr(func, "_telemetry", None)
-        print(f"   🔧 wrapper._telemetry(initial)={wrapped._telemetry}", flush=True)
+        print(f"    wrapper._telemetry(initial)={wrapped._telemetry}", flush=True)
 
         # Store mapping (CRITICAL)
         self._wrapped[func] = wrapped
-        print(f"   🗂 Stored mapping: {func} → {wrapped}", flush=True)
+        print(f"    Stored mapping: {func} → {wrapped}", flush=True)
 
         print("🔧 [FunctionInstrumentor.instrument] DONE\n", flush=True)
         return wrapped
