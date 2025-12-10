@@ -199,21 +199,16 @@ class TelemetryCollector:
     
 
     def instrument_function(self, func, name: str = None):
-        # avoid double wrapping
         if getattr(func, "__wrapped_by_sdk__", False):
-            logger.debug("instrument_function: func already wrapped, returning original")
             return func
 
         wrapped = self._func_instrumentor.instrument(func, name)
 
-        # Attach telemetry collector instance so wrapper will use it
         wrapped._telemetry = self
         wrapped.__wrapped_by_sdk__ = True
 
-        logger.debug("instrument_function: attached tele to wrapper for %s", getattr(wrapped, "__name__", None))
         print(f"[SDK DEBUG] TelemetryCollector attached to {wrapped.__name__}")
         return wrapped
-
 
 
     # ---------------- CONTEXT ----------------

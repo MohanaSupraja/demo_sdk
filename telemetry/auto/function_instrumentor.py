@@ -220,9 +220,17 @@ class FunctionInstrumentor:
         self._wrapped = {}
 
     def instrument(self, func, name: Optional[str] = None):
+
+        # If already wrapped, return existing wrapper
+        if func in self._wrapped:
+            return self._wrapped[func]
+
         wrapped = instrument_function(func, name)
-        wrapped._telemetry = getattr(func, "_telemetry", None)  # allow TelemetryCollector to override
+        wrapped._telemetry = getattr(func, "_telemetry", None)
+        self._wrapped[func] = wrapped
+
         return wrapped
+
 
 
     def get_wrapped(self, func):
