@@ -16,9 +16,10 @@ class DatabaseInstrumentor:
         - PyMongo
 
     Features:
-        - Safe fallback (never breaks user app)
+        - Safe fallback
         - Idempotent instrumentation
-        - Optional engine-based SQLAlchemy instrumentation
+        - Clear tracing/logging template
+        - Optional SQLAlchemy engine instrumentation
     """
 
     _INSTRUMENTOR_MAP: Dict[str, tuple] = {
@@ -48,61 +49,84 @@ class DatabaseInstrumentor:
         self._status: Dict[str, str] = {}  # lib -> "instrumented" / "uninstrumented"
 
     # ----------------------------------------------------------------------
-    def instrument(self, libraries: List[str], sqlalchemy_engine: Optional[Any] = None) -> Dict[str, bool]:
+    def instrument(
+        self,
+        libraries: List[str],
+        sqlalchemy_engine: Optional[Any] = None
+    ) -> Dict[str, bool]:
         """
-        Instrument database libraries.
+        Auto-instrument configured database libraries.
+        """
 
-        :param libraries: list of library names
-        :param sqlalchemy_engine: optional SQLAlchemy engine for SQLAlchemy instrumentation
-        """
         results = {}
 
         for lib in libraries:
             lib = lib.lower()
 
+            # -------------------------------------------------------------
             # Already instrumented
+            # -------------------------------------------------------------
             if self._status.get(lib) == "instrumented":
+                logger.debug(f"[DB-INSTRUMENTOR] {lib} already instrumented")
                 results[lib] = True
                 continue
 
-            # Unsupported library
+            # -------------------------------------------------------------
+            # Unknown library
+            # -------------------------------------------------------------
             if lib not in self._INSTRUMENTOR_MAP:
-                logger.debug("No database instrumentor found for %s", lib)
+                logger.debug(f"[DB-INSTRUMENTOR] No instrumentor registered for {lib}")
                 results[lib] = False
                 continue
 
             module_path, class_name = self._INSTRUMENTOR_MAP[lib]
 
+            # -------------------------------------------------------------
+            # Import instrumentor class
+            # -------------------------------------------------------------
             try:
                 mod = __import__(module_path, fromlist=[class_name])
-                Instrumentor = getattr(mod, class_name)
+                InstrumentorClass = getattr(mod, class_name)
+
             except Exception as e:
-                logger.debug("Failed to import instrumentor for %s: %s", lib, e, exc_info=True)
+                logger.warning(
+                    f"[DB-INSTRUMENTOR] Failed to import {class_name} for {lib}: {e}",
+                    exc_info=True
+                )
                 results[lib] = False
                 continue
 
-            inst = Instrumentor()
+            inst = InstrumentorClass()
 
+            # -------------------------------------------------------------
+            # Perform instrumentation
+            # -------------------------------------------------------------
             try:
-                # Special handling for SQLAlchemy
+
+                # SQLAlchemy: engine provided → instrument engine
                 if lib == "sqlalchemy" and sqlalchemy_engine is not None:
                     inst.instrument(engine=sqlalchemy_engine)
+
                 else:
                     inst.instrument()
 
                 self._status[lib] = "instrumented"
-                logger.info("Instrumented database library: %s", lib)
+
+                logger.info(f"[DB-INSTRUMENTOR] Instrumented database library: {lib}")
                 results[lib] = True
 
             except Exception as e:
-                logger.debug("Instrumentation failed for %s: %s", lib, e, exc_info=True)
+                logger.error(
+                    f"[DB-INSTRUMENTOR] Instrumentation FAILED for {lib}: {e}",
+                    exc_info=True
+                )
                 results[lib] = False
 
         return results
 
     # ----------------------------------------------------------------------
     def uninstrument(self, lib: str) -> bool:
-        """Undo instrumentation for a single library."""
+        """Undo instrumentation for a given database library."""
         lib = lib.lower()
 
         if lib not in self._INSTRUMENTOR_MAP:
@@ -112,8 +136,8 @@ class DatabaseInstrumentor:
 
         try:
             mod = __import__(module_path, fromlist=[class_name])
-            Instrumentor = getattr(mod, class_name)
-            inst = Instrumentor()
+            InstrumentorClass = getattr(mod, class_name)
+            inst = InstrumentorClass()
         except Exception:
             return False
 
@@ -122,14 +146,18 @@ class DatabaseInstrumentor:
                 inst.uninstrument()
 
             self._status[lib] = "uninstrumented"
-            logger.info("Uninstrumented database library: %s", lib)
+            logger.info(f"[DB-INSTRUMENTOR] Uninstrumented {lib}")
             return True
 
         except Exception:
-            logger.debug("Uninstrumentation failed for %s", lib, exc_info=True)
+            logger.debug(
+                f"[DB-INSTRUMENTOR] Uninstrumentation failed for {lib}",
+                exc_info=True
+            )
             return False
 
     # ----------------------------------------------------------------------
     def status(self) -> Dict[str, str]:
-        """Return the instrumentation status for each library."""
+        """Return instrumentation status of all DB libs."""
         return dict(self._status)
+

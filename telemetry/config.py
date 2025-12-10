@@ -70,7 +70,6 @@ class TelemetryConfig:
     capture_response_body: bool = False
     capture_sql_queries: bool = True
 
-    # Logs sampling
     log_sample_rate: float = 1.0
 
     # -------------------------------------------------------------
@@ -83,77 +82,91 @@ class TelemetryConfig:
     exclude_urls: List[str] = field(default_factory=lambda: ["/health", "/metrics"])
     max_span_attributes: int = 100
 
-    # -------------------------------------------------------------
-    # CONVERSION
-    # -------------------------------------------------------------
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
-    # -------------------------------------------------------------
     # LOAD FROM ENVIRONMENT
-    # -------------------------------------------------------------
-    @staticmethod
-    def from_env() -> "TelemetryConfig":
+    
+    # @staticmethod
+    # def from_env() -> "TelemetryConfig":
 
-        def get_bool(name: str, default=False):
-            v = os.environ.get(name)
-            if v is None:
-                return default
-            return v.lower() in ("1", "true", "yes", "on")
+    #     def get_bool(name: str, default=False):
+    #         v = os.environ.get(name)
+    #         if v is None:
+    #             return default
+    #         return v.lower() in ("1", "true", "yes", "on")
 
-        raw_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-        raw_protocol = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    #     raw_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    #     raw_protocol = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
 
-        cfg = TelemetryConfig(
-            service_name=os.environ.get("OTEL_SERVICE_NAME", "sify-service"),
+    #     cfg = TelemetryConfig(
+    #         service_name=os.environ.get("OTEL_SERVICE_NAME", "sify-service"),
 
-            collector_endpoint=raw_endpoint,
-            protocol=raw_protocol.lower(),
+    #         collector_endpoint=raw_endpoint,
+    #         protocol=raw_protocol.lower(),
 
-            enable_traces=get_bool("SIFY_ENABLE_TRACES", True),
-            enable_metrics=get_bool("SIFY_ENABLE_METRICS", True),
-            enable_logs=get_bool("SIFY_ENABLE_LOGS", True),
+    #         enable_traces=get_bool("SIFY_ENABLE_TRACES", True),
+    #         enable_metrics=get_bool("SIFY_ENABLE_METRICS", True),
+    #         enable_logs=get_bool("SIFY_ENABLE_LOGS", True),
 
-            auto_instrument=get_bool("SIFY_AUTO_INSTRUMENT", False),
+    #         auto_instrument=get_bool("SIFY_AUTO_INSTRUMENT", False),
 
-            instrument_frameworks=get_bool("SIFY_INSTRUMENT_FRAMEWORKS", True),
+    #         instrument_frameworks=get_bool("SIFY_INSTRUMENT_FRAMEWORKS", True),
 
-            instrument_libraries_enabled=get_bool("SIFY_INSTRUMENT_LIBRARIES_ENABLED", True),
-            instrument_databases_enabled=get_bool("SIFY_INSTRUMENT_DATABASES_ENABLED", True),
+    #         instrument_libraries_enabled=get_bool("SIFY_INSTRUMENT_LIBRARIES_ENABLED", True),
+    #         instrument_databases_enabled=get_bool("SIFY_INSTRUMENT_DATABASES_ENABLED", True),
 
-            instrument_libraries=(
-                os.environ.get("SIFY_INSTRUMENT_LIBRARIES", "").split(",")
-                if os.environ.get("SIFY_INSTRUMENT_LIBRARIES")
-                else ["requests", "urllib3", "httpx"]
-            ),
+    #         instrument_libraries=(
+    #             os.environ.get("SIFY_INSTRUMENT_LIBRARIES", "").split(",")
+    #             if os.environ.get("SIFY_INSTRUMENT_LIBRARIES")
+    #             else ["requests", "urllib3", "httpx"]
+    #         ),
 
-            instrument_databases=(
-                os.environ.get("SIFY_INSTRUMENT_DATABASES", "").split(",")
-                if os.environ.get("SIFY_INSTRUMENT_DATABASES")
-                else ["sqlalchemy", "psycopg2", "pymysql", "redis", "pymongo"]
-            ),
+    #         instrument_databases=(
+    #             os.environ.get("SIFY_INSTRUMENT_DATABASES", "").split(",")
+    #             if os.environ.get("SIFY_INSTRUMENT_DATABASES")
+    #             else ["sqlalchemy", "psycopg2", "pymysql", "redis", "pymongo"]
+    #         ),
 
-            instrument_sify_sdk=get_bool("SIFY_INSTRUMENT_SDK", False),
+    #         instrument_sify_sdk=get_bool("SIFY_INSTRUMENT_SDK", False),
 
-            sampling_rate=float(os.environ.get("SIFY_SAMPLING_RATE", "1.0")),
-            export_interval_ms=int(os.environ.get("SIFY_EXPORT_INTERVAL_MS", "5000")),
-            log_sample_rate=float(os.environ.get("SIFY_LOG_SAMPLE_RATE", "1.0")),
-        )
+    #         sampling_rate=float(os.environ.get("SIFY_SAMPLING_RATE", "1.0")),
+    #         export_interval_ms=int(os.environ.get("SIFY_EXPORT_INTERVAL_MS", "5000")),
+    #         log_sample_rate=float(os.environ.get("SIFY_LOG_SAMPLE_RATE", "1.0")),
+    #     )
 
-        # Normalize HTTP endpoint
-        if cfg.collector_endpoint and cfg.protocol.startswith("http"):
-            REMOVE_SUFFIXES = [
-                "/v1/traces", "/v1/metrics", "/v1/logs",
-                "/v1/traces/", "/v1/metrics/", "/v1/logs/"
-            ]
-            for suf in REMOVE_SUFFIXES:
-                if cfg.collector_endpoint.endswith(suf):
-                    cfg.collector_endpoint = cfg.collector_endpoint[:-len(suf)]
-                    break
+    #     # Normalize HTTP endpoint
+    #     if cfg.collector_endpoint and cfg.protocol.startswith("http"):
+    #         REMOVE_SUFFIXES = [
+    #             "/v1/traces", "/v1/metrics", "/v1/logs",
+    #             "/v1/traces/", "/v1/metrics/", "/v1/logs/"
+    #         ]
+    #         for suf in REMOVE_SUFFIXES:
+    #             if cfg.collector_endpoint.endswith(suf):
+    #                 cfg.collector_endpoint = cfg.collector_endpoint[:-len(suf)]
+    #                 break
 
-            cfg.collector_endpoint = cfg.collector_endpoint.rstrip("/")
+    #         cfg.collector_endpoint = cfg.collector_endpoint.rstrip("/")
 
-        # Always attach service name to resources
-        cfg.resource_attributes["service.name"] = cfg.service_name
+    #     # Always attach service name to resources
+    #     cfg.resource_attributes["service.name"] = cfg.service_name
 
-        return cfg
+    #     return cfg
+
+
+
+
+# ---------------resource_attributes means
+
+# service name
+
+# environment (dev/test/prod)
+
+# region
+
+# host name
+
+# container ID
+
+# version
