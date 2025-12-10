@@ -41,7 +41,7 @@ class DatabaseInstrumentor:
         ),
         "pymongo": (
             "opentelemetry.instrumentation.pymongo",
-            "MongoDBInstrumentor",
+            "PymongoInstrumentor",
         ),
     }
 
