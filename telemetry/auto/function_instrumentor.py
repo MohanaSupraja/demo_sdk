@@ -221,7 +221,7 @@ class FunctionInstrumentor:
 
     def instrument(self, func, name: Optional[str] = None):
         wrapped = instrument_function(func, name)
-        wrapped._telemetry = None   # allow TelemetryCollector to override
+        wrapped._telemetry = getattr(func, "_telemetry", None)  # allow TelemetryCollector to override
         return wrapped
 
 

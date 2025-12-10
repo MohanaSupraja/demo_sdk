@@ -208,7 +208,7 @@ class TelemetryCollector:
 
         # Attach telemetry collector instance so wrapper will use it
         wrapped._telemetry = self
-        setattr(wrapped, "__wrapped_by_sdk__", True)
+        wrapped.__wrapped_by_sdk__ = True
 
         logger.debug("instrument_function: attached tele to wrapper for %s", getattr(wrapped, "__name__", None))
         print(f"[SDK DEBUG] TelemetryCollector attached to {wrapped.__name__}")
