@@ -45,7 +45,7 @@ class TelemetryConfig:
     )
 
     # Database instrumentation
-    instrument_databases_enabled: bool = True
+    instrument_databases_enabled: bool = False
     instrument_databases: List[str] = field(
         default_factory=lambda: ["sqlalchemy"]
     )
