@@ -31,10 +31,6 @@ class DatabaseInstrumentor:
             "opentelemetry.instrumentation.psycopg2",
             "Psycopg2Instrumentor",
         ),
-        "pymysql": (
-            "opentelemetry.instrumentation.pymysql",
-            "PyMySQLInstrumentor",
-        ),
         "redis": (
             "opentelemetry.instrumentation.redis",
             "RedisInstrumentor",

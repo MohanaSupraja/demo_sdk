@@ -47,7 +47,7 @@ class TelemetryConfig:
     # Database instrumentation
     instrument_databases_enabled: bool = True
     instrument_databases: List[str] = field(
-        default_factory=lambda: ["sqlalchemy", "psycopg2", "pymysql", "redis", "pymongo"]
+        default_factory=lambda: ["sqlalchemy"]
     )
 
     # Instrument this SDK itself
