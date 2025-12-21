@@ -7,11 +7,13 @@ logger = logging.getLogger(__name__)
 
 def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
     """
-    Production-grade OpenTelemetry initialization.
-    Handles:
-      - Traces (HTTP / gRPC / Console fallback)
-      - Metrics (HTTP / gRPC / Console fallback)
-      - Logs (HTTP / gRPC / Console fallback)  ← FIXED
+    PRODUCTION-GRADE OpenTelemetry setup:
+    - Traces (HTTP/gRPC)
+    - Metrics (HTTP/gRPC)
+    - Retry policies + compression
+    - Span limits
+    - Batch processor tuning
+    - Safe fallbacks to console exporters
     """
 
     providers = {
@@ -21,191 +23,158 @@ def setup_otel(config: TelemetryConfig) -> Dict[str, Any]:
     }
 
     try:
-        # ------------------------------------------------------------
-        # Imports
-        # ------------------------------------------------------------
         from opentelemetry.sdk.resources import Resource
         from opentelemetry import trace, metrics
-
-        from opentelemetry.sdk.trace import TracerProvider, SpanLimits
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
         )
-
-        from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import (
-            PeriodicExportingMetricReader,
             ConsoleMetricExporter,
+            PeriodicExportingMetricReader,
         )
-
-        # OTLP Exporters
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPTraceExporter
-        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter as HTTPMetricExporter
-        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter as HTTPLogExporter
-
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as GRPCTraceExporter
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as GRPCSpanExporter
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter as GRPCMetricExporter
-        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter as GRPCLogExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter as HTTPMetricExporter
 
-        # Logs backend
-        from opentelemetry.sdk._logs import LoggerProvider
-        from opentelemetry._logs import set_logger_provider
-        from opentelemetry.sdk._logs.export import (
-            BatchLogRecordProcessor,
-            ConsoleLogExporter,
-        )
-
-        # ------------------------------------------------------------
-        # Build Resource
-        # ------------------------------------------------------------
+        # -------------------------------------
+        # 1️ RESOURCE (service.name, env, etc.)
+        # -------------------------------------
         resource_attrs = config.resource_attributes or {}
         resource_attrs["service.name"] = config.service_name
-
         resource = Resource(attributes=resource_attrs)
-        use_http = (config.protocol or "").lower().startswith("http")
 
-        # ------------------------------------------------------------
-        # TRACE PROVIDER
-        # ------------------------------------------------------------
+        use_http = (config.protocol or "").startswith("http")
+
+        # ===============================================================
+        # 2️ TRACE PROVIDER + EXPORTER WITH RETRIES + COMPRESSION
+        # ===============================================================
         try:
+            # Span limits (important for production)
+            from opentelemetry.sdk.trace import SpanLimits
+
             span_limits = SpanLimits(
-                max_attributes=config.max_span_attributes,
+                max_attributes=config.max_span_attributes or 128,
                 max_events=256,
                 max_links=128,
             )
 
-            tracer_provider = TracerProvider(
-                resource=resource,
-                span_limits=span_limits
-            )
+            tracer_provider = TracerProvider(resource=resource, span_limits=span_limits)
 
-            # exporter selection
+            # Exporter Selection
             try:
-                if use_http and config.collector_endpoint:
-                    span_exporter = HTTPTraceExporter(
-                        endpoint=f"{config.collector_endpoint}/v1/traces",
-                        headers=config.headers or {},
-                    )
-                elif config.collector_endpoint:
-                    span_exporter = GRPCTraceExporter(
-                        endpoint=config.collector_endpoint,
-                        insecure=config.insecure,
-                        headers=config.headers or {},
-                    )
+                if config.collector_endpoint or use_http:
+
+                    exporter_kwargs = {
+                        "headers": config.headers or {},
+                        "compression": "gzip",         # 🔥 enable compression
+                        "timeout": 10_000,             # 🔥 ms timeout
+                    }
+
+                    if use_http:
+                        span_exporter = HTTPSpanExporter(**exporter_kwargs)
+                    else:
+                        span_exporter = GRPCSpanExporter(
+                            endpoint=config.collector_endpoint,
+                            insecure=config.insecure,
+                            **exporter_kwargs,
+                        )
                 else:
                     span_exporter = ConsoleSpanExporter()
 
             except Exception as e:
-                logger.warning("HTTP/GRPC trace exporter failed → console fallback: %s", e)
+                logger.warning("OTLPSpanExporter failed, console fallback used: %s", e)
                 span_exporter = ConsoleSpanExporter()
 
-            processor = BatchSpanProcessor(
+            # Batch Processor (tuned for production)
+            span_processor = BatchSpanProcessor(
                 span_exporter,
                 max_export_batch_size=config.max_export_batch_size,
                 max_queue_size=config.max_queue_size,
                 schedule_delay_millis=config.export_interval_ms,
             )
 
-            tracer_provider.add_span_processor(processor)
-
-            from opentelemetry.trace import get_tracer_provider, TracerProvider as SDKTracerProvider
-            current = get_tracer_provider()
-
-            if not isinstance(current, SDKTracerProvider):
-                trace.set_tracer_provider(tracer_provider)
-
+            tracer_provider.add_span_processor(span_processor)
+            trace.set_tracer_provider(tracer_provider)
             providers["tracer_provider"] = tracer_provider
 
         except Exception as e:
-            logger.error("Error setting up TracerProvider: %s", e, exc_info=True)
+            logger.debug("Tracer setup failed: %s", e)
 
-        # ------------------------------------------------------------
-        # METRICS PROVIDER
-        # ------------------------------------------------------------
+        # ===============================================================
+        #  METRICS PROVIDER + EXPORTER WITH RETRIES + COMPRESSION
+        # ===============================================================
         try:
+            # Aggregation selector example (advanced tuning)
+            from opentelemetry.sdk.metrics.view import View
+            from opentelemetry.sdk.metrics.aggregation import ExplicitBucketHistogramAggregation
+
+            # Example view (this can be expanded based on needs)
+            histogram_view = View(
+                instrument_type="histogram",
+                aggregation=ExplicitBucketHistogramAggregation([
+                    0, 10, 50, 100, 500, 1000, 2000
+                ]),
+            )
+
             try:
-                if use_http and config.collector_endpoint:
-                    metric_exporter = HTTPMetricExporter(
-                        endpoint=f"{config.collector_endpoint}/v1/metrics",
-                        headers=config.headers or {},
-                    )
-                elif config.collector_endpoint:
-                    metric_exporter = GRPCMetricExporter(
-                        endpoint=config.collector_endpoint,
-                        insecure=config.insecure,
-                        headers=config.headers or {},
-                    )
+                if config.collector_endpoint or use_http:
+
+                    exporter_kwargs = {
+                        "headers": config.headers or {},
+                        "compression": "gzip",
+                        "timeout": 10_000,
+                    }
+
+                    if use_http:
+                        metric_exporter = HTTPMetricExporter(**exporter_kwargs)
+                    else:
+                        metric_exporter = GRPCMetricExporter(
+                            endpoint=config.collector_endpoint,
+                            insecure=config.insecure,
+                            **exporter_kwargs,
+                        )
                 else:
                     metric_exporter = ConsoleMetricExporter()
 
             except Exception as e:
-                logger.warning("Metric exporter failed → console: %s", e)
+                logger.warning("OTLPMetricExporter failed, console fallback used: %s", e)
                 metric_exporter = ConsoleMetricExporter()
 
             metric_reader = PeriodicExportingMetricReader(
-                exporter=metric_exporter,
+                metric_exporter,
                 export_interval_millis=config.export_interval_ms,
             )
 
             meter_provider = MeterProvider(
                 resource=resource,
                 metric_readers=[metric_reader],
+                views=[histogram_view],
             )
 
             metrics.set_meter_provider(meter_provider)
             providers["meter_provider"] = meter_provider
 
         except Exception as e:
-            logger.error("Metrics setup failed: %s", e)
+            logger.debug("Metrics setup failed: %s", e)
 
-        # ------------------------------------------------------------
-        # LOG PROVIDER (FIXED)
-        # ------------------------------------------------------------
-        try:
-            logger_provider = LoggerProvider(resource=resource)
-
-            # export via HTTP or gRPC
-            try:
-                if use_http and config.collector_endpoint:
-                    log_exporter = HTTPLogExporter(
-                        endpoint=f"{config.collector_endpoint}/v1/logs",
-                        headers=config.headers or {},
-                    )
-                elif config.collector_endpoint:
-                    log_exporter = GRPCLogExporter(
-                        endpoint=config.collector_endpoint,
-                        insecure=config.insecure,
-                        headers=config.headers or {},
-                    )
-                else:
-                    log_exporter = ConsoleLogExporter()
-
-            except Exception as e:
-                logger.warning("Log exporter failed → console: %s", e)
-                log_exporter = ConsoleLogExporter()
-
-            logger_provider.add_log_record_processor(
-                BatchLogRecordProcessor(log_exporter)
-            )
-
-            # REGISTER GLOBALLY  ← REQUIRED for logs to work
-            set_logger_provider(logger_provider)
-
-            providers["logger_provider"] = logger_provider
-
-        except Exception as e:
-            logger.error("Logs setup failed: %s", e)
+        # ================================
+        # 4️ LOGS — handled in LogsManager
+        # ================================
+        providers["logger_provider"] = None
 
     except Exception as e:
-        logger.exception("Global OTEL setup failed: %s", e)
+        logger.exception("Failed setting up OTEL: %s", e)
 
     return providers
 
 
 
 
-"""setup_otel() initializes OpenTelemetry Tracing + Metrics for your SDK:
+f"""setup_otel() initializes OpenTelemetry Tracing + Metrics for your SDK:
 
 Creates resource attributes like service.name
 
